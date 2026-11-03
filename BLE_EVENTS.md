@@ -1,6 +1,6 @@
 # Pickup event log over BLE
 
-The firmware advertises **ESP32-Pickup**. Install **NimBLE-Arduino by h2zero,
+The firmware advertises **Pickup lists**. Install **NimBLE-Arduino by h2zero,
 version 2.5.2** in Arduino Library Manager. It replaces the bundled Bluedroid
 BLE host to reduce runtime RAM use. No Bluetooth Serial/SPP application is needed.
 The existing Wi-Fi dashboard and OTA service remain enabled.
@@ -29,43 +29,68 @@ UTC timestamps use ISO 8601, for example `2026-11-03T14:25:00Z`.
 
 ## Read with nRF Connect for Mobile
 
-1. Flash this version, then scan in nRF Connect and connect to **ESP32-Pickup**.
-2. Expand custom service `c7390001-7a32-4ec3-bb3b-81ae5d9a0000`.
-3. Tap **Read** (down arrow) for characteristic
-   `c7390002-7a32-4ec3-bb3b-81ae5d9a0000`: metadata includes count, newest ID,
-   current UTC, storage health and whether a save is pending.
-4. Read event characteristic `c7390100-7a32-4ec3-bb3b-81ae5d9a0000`
-   for slot 0, the newest event. Slots 1 through 9 have first groups
-   `c7390101` through `c7390109`, with the same remaining UUID.
-   The standard description labels each slot. Select UTF-8/text display in the app.
-5. Read the other populated slots as needed. Each read returns one JSON object,
-   below the 512-byte GATT value limit. Long reads are fragmented by GATT; no
-   notifications need to be enabled. If the phone only shows an initial fragment,
-   request MTU 247 (Android) and read again/use its long-read operation.
-6. Read metadata again after a multi-slot download. If `newest_id` changed, a new
-   event shifted the slots; reread and use record IDs to avoid duplicates.
+1. After updating, disconnect/reconnect and use **Refresh services** to clear the
+   old GATT cache. The former metadata, clock and ten slot characteristics are gone.
+2. Scan for **Pickup lists**. Its custom service UUID remains
+   `c7390001-7a32-4ec3-bb3b-81ae5d9a0000`.
+3. There is **one custom characteristic**:
+   `c7390004-7a32-4ec3-bb3b-81ae5d9a0000` (READ / WRITE).
+   Tap **Read** and select UTF-8/text display if necessary. No notifications are needed.
+4. A single read returns a coherent snapshot of up to ten events, newest first,
+   separated by newlines. Read again to refresh active duration/new events.
+   If the app only shows a fragment, request MTU 247 and use its long-read support.
 
-Example response:
-
-```json
-{"slot":0,"id":12,"started_utc":"2026-11-03T14:25:00Z","ended_utc":"2026-11-03T14:25:06Z","duration_ms":6250,"state":"complete","reason_mask":6,"reasons":["tilt","rotation"]}
+```text
+UTC|dur|state|reasons
+2026-11-03 18:20:10|6.2s|done|tilt+gyro
+2026-11-03 18:10:04|?|reboot|accel
+unknown|2.1s|active|gyro
 ```
 
-An unused slot returns `{"slot":9,"event":null}`. Active records have a live
-elapsed duration and no end timestamp. Mask bits are acceleration=1, tilt=2,
-rotation=4. Slots are snapshots taken at the start of each read.
+`done` means the alert cleared after stillness; `active` means it is ongoing;
+`reboot` means it was interrupted by a reboot, with unknown duration (`?`).
+`unknown` means the start timestamp was captured before clock synchronization.
+`accel`, `tilt`, `gyro` name the confirming acceleration departure, tilt and
+filtered rotation threshold(s). Times are UTC; the first column is the event start.
 
-For offline UTC setup, write the current **10-digit Unix timestamp in seconds** as
-UTF-8/text (not hexadecimal/binary) to `c7390003-7a32-4ec3-bb3b-81ae5d9a0000`.
-Read it back for `OK` or an error, then reread metadata to verify UTC. Accepted
-years are 2024–2099. This affects future timestamps, not stored event times. NTP
-may subsequently correct the clock. This basic service has no pairing requirement;
-nearby clients can read the log and set its clock. No credentials are exposed.
-On your PC, PowerShell can produce the value to paste into nRF Connect:
-`[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()`.
+Durations below 100 seconds show tenths. Longer durations use whole seconds,
+then minutes (`m`), hours (`h`), days (`d`) or 365-day years (`y`) to keep fields
+within five characters; displayed values are truncated. Exact milliseconds
+remain available through the unchanged JSON API. An empty log says
+`No pickup events.`. The header plus ten worst-case rows fit **512 bytes**,
+the GATT value limit, without truncating any event. ATT handles fragmentation;
+this is not a stream of notifications. Startup self-tests check the full-size list.
 
-For comparison without a BLE client, `/api/pickup/events` returns the same slots
-and metadata over Wi-Fi. It is a diagnostic route, not a new dashboard widget.
+### Name the service and characteristic on Android
+
+A custom GATT service transmits a UUID, not a human-readable service name.
+Firmware sets the advertised device name and a characteristic description to
+**Pickup lists**. nRF Connect resolves its service heading from local definitions.
+
+- On the phone, open `http://<ESP32-IP>/pickup-uuids.json` and save the download.
+- In nRF Connect, open **menu → Definitions → three-dot menu → Import**, and select
+  `pickup-uuids.json`. It maps this service and its single characteristic to
+  **Pickup lists** and sets the value format to **TEXT**. Reconnect/refresh services.
+- Alternatively, long-press the service/characteristic and tap the edit icon to
+  assign its local name. Menu wording may vary with nRF Connect version.
+
+These are app-side labels; standard Generic Access / Generic Attribute entries
+remain present and are not additional custom event characteristics.
+See [Nordic's Android naming instructions](https://devzone.nordicsemi.com/f/nordic-q-a/109155/how-to-add-custom-uuids-definitions-in-nrf-connect-for-mobile/504333)
+and [definition import guidance](https://devzone.nordicsemi.com/f/nordic-q-a/67038/adding-a-human-readable-description-for-custom-characteristics).
+
+For offline UTC setup, write `TIME ` followed by the current **10-digit Unix
+timestamp in seconds**, as UTF-8/text, to the same list characteristic. Bare ten
+digits are also accepted. Every read still returns the event list; validation
+errors/clock-setting results are logged to serial. Verify current UTC through
+the HTTP metadata if needed. Accepted years are 2024–2099; only future event
+timestamps change, and NTP may later correct the clock. PowerShell can produce
+the value to paste: `[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()`.
+The basic service requires no pairing; nearby clients can read events/set UTC.
+
+`/api/pickup/events/text` returns the exact BLE list for browser comparison.
+`/api/pickup/events` retains full JSON records/metadata and memory diagnostics
+for tools that need exact durations, IDs and end timestamps.
 
 ## Compile and flash
 
@@ -140,19 +165,32 @@ MPU6050 I2C status/count error occurred during checks, then recovered to valid
 BLE stack startup is verified; phone discovery, connection and GATT reads still
 require nRF Connect confirmation.
 
+Single-list update validation: firmware compiled with 1,468,696 application
+bytes (72%) / 74,060 static RAM bytes (22%). Dashboard/tuning tests and Android
+definition-schema tests passed. Two OTA transfers failed (timeout / host-side
+connection abort); USB upload on COM5 succeeded and flash hashes verified.
+After reboot, BLE was ready with 59,064 free heap bytes. All six saved events
+remained present; the 247-byte text endpoint matched their newest-first JSON
+order, timestamps and states. The definitions download returned both names as
+`Pickup lists` and format `TEXT`; detector self-tests passed. Refreshing Android's
+GATT cache, importing the names and reading the new characteristic on the phone
+remain the final UI checks. A full ten-row boundary case is included in journal
+startup self-tests; its worst-case formatted size is 512 bytes.
+
 To upload the existing build without compiling again, close Serial Monitor and
 run the following from PowerShell (adjust COM5 if needed):
 
 ```powershell
 & 'D:/ArduinoIDE/Arduino IDE/resources/app/lib/backend/resources/arduino-cli.exe' upload --config-file C:/Users/przemek/.arduinoIDE/arduino-cli.yaml --fqbn esp32:esp32:esp32:PartitionScheme=no_fs --port COM5 --input-dir D:/code/ESP32_1/build-ble D:/code/ESP32_1
 ```
-This is a USB upload, not OTA, and does not invoke compilation. The rebooting
-old firmware cannot accept an OTA recovery upload.
+This is a USB upload, not OTA, and does not invoke compilation. It also provides
+recovery when an OTA transfer fails or the old firmware cannot connect.
 
 Check serial `[ble]` and `[events]` diagnostics, metadata clock/storage health,
 and connect/read/disconnect/reconnect with nRF Connect. Generate a pickup, read
-its active record, set the module down, and verify that the same ID becomes
-complete with the graph's confirming causes and a plausible elapsed duration.
+its active row, set the module down, and verify that it becomes `done`, with
+the graph's confirming causes and a plausible elapsed duration. The HTTP JSON
+record ID can be used to track it unambiguously if several events occur.
 Generate at least 11 events and confirm only the newest 10 remain. Reboot after
 completion to check persistence; reboot during an alert to check `interrupted`.
 Test with no internet (null timestamps or phone-set clock), repeated long reads,

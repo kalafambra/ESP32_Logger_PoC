@@ -288,6 +288,7 @@ use deg/s. The API/stored detector settings retain rad/s, with display conversio
 metadata for compatibility. See PICKUP_DETECTOR.md for details and caveats.
 
 BLE event history: see [BLE_EVENTS.md](BLE_EVENTS.md) for nRF Connect UUIDs,
+the single **Pickup lists** text characteristic and Android naming import,
 ten-event persistent storage, UTC handling, and phone/USB verification. This
 version requires the **No FS 4MB (2MB APP x2)** partition
 scheme and a one-time USB upload before OTA can resume with the larger binary.

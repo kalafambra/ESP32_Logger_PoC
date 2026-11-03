@@ -383,6 +383,13 @@ void setup() {
     for(unsigned i=0;i<10;++i){if(i)json+=',';json+=pickupEvents.eventJson(i);}json+="]}";
     server.sendHeader("Cache-Control","no-store");server.send(200,"application/json",json);
   });
+  server.on("/api/pickup/events/text",HTTP_GET,[](){
+    server.sendHeader("Cache-Control","no-store");server.send(200,"text/plain; charset=utf-8",pickupEvents.listText());
+  });
+  server.on("/pickup-uuids.json",HTTP_GET,[](){
+    server.sendHeader("Content-Disposition","attachment; filename=pickup-uuids.json");
+    server.send_P(200,"application/json",PICKUP_UUID_DEFINITIONS);
+  });
   server.on("/api/pickup/settings", HTTP_POST, updatePickupSettings);
   server.on("/api/pickup/defaults", HTTP_POST, restorePickupDefaults);
   /* Serve the original binary PNG with an explicit length, including any zero bytes. */
