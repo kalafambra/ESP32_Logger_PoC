@@ -4,9 +4,13 @@
 #include <WebServer.h>
 #include "pickup_detector.h"
 #include "pickup_selftest.h"
+#include "pickup_debug.h"
 extern WebServer server;
 
 PickupDetector pickup;
+PickupDebug pickupDebug;
+uint32_t pickupSettingsRevision=1,pickupDebugGapPeak=0;
+void appendPickup(String &json);
 struct PickupField { const char *key, *label, *unit; float PickupSettings::*member; float min, max, step; };
 const PickupField pickupFields[] = {
  {"stationary_ms","Stationary/baseline duration","ms",&PickupSettings::stationary_ms,500,10000,10},
@@ -82,9 +86,11 @@ void setupPickup() {
 /* Feed raw-frame vectors, with gyro in rad/s; FIFO read timestamps must not replace the 10 ms sensor cadence. */
 void processPickupSample(const float *a,const float *w,uint32_t now) {
   if (!pickupSelfTestsPassed) return;
+  if(pickupDataValid)pickupDebugGapPeak=max(pickupDebugGapPeak,now-pickupLastSampleMs);
   if (pickupDataValid && now-pickupLastSampleMs > pickup.settings.max_gap_ms) pickup.reset();
   pickupLastSampleMs = now; pickupDataValid = true; pickupDataError = "";
   pickup.process(a,w);
+  if(pickupDebug.capture(pickup,pickupDataValid,now,pickupDebugGapPeak,0,pickupLedOn,pickupSettingsRevision))pickupDebugGapPeak=0;
 }
 
 /* Publish state transitions and synchronize the dedicated LED timer without delays or acquisition pulses. */
@@ -101,6 +107,19 @@ void servicePickup(uint32_t now) {
   if (pickupLedAlert != pickup.active) pickupLedPhase = 0;
   pickupLedAlert = pickup.active; pickupLedPeriod = period; pickupLedDuty = duty;
   portEXIT_CRITICAL(&pickupLedMux);
+  if(pickupDebug.capture(pickup,pickupDataValid,now,pickupDebugGapPeak,now-pickupLastSampleMs,pickupLedOn,pickupSettingsRevision))pickupDebugGapPeak=0;
+}
+
+/* Lightweight, leased debug stream: bounded batches rather than resending every graph's history. */
+void sendPickupDebug() {
+  const uint32_t now=millis();
+  if(!pickupDebug.subscribe(now)){server.send(503,"application/json","{\"error\":\"Not enough memory for debug history\"}");return;}
+  uint32_t since=server.hasArg("since")?strtoul(server.arg("since").c_str(),nullptr,10):0;
+  if(since>pickupDebug.sequence)since=0;
+  String json;json.reserve(9000);json="{\"uptime_ms\":"+String(now)+",\"settings_revision\":"+String(pickupSettingsRevision);
+  json+=",\"free_heap\":"+String(ESP.getFreeHeap())+",\"largest_free_block\":"+String(ESP.getMaxAllocHeap());
+  appendPickup(json);pickupDebug.appendJson(json,since);json+='}';
+  server.sendHeader("Cache-Control","no-store");server.send(200,"application/json",json);
 }
 
 /* Serialize status separately from graphs so faults cannot be mistaken for a quiet, safe detector. */
@@ -127,13 +146,16 @@ void sendPickupStatus() {
 /* Include validation metadata so the dashboard uses the same limits and units as the firmware. */
 void sendPickupSettings() {
   String json = "{\"persisted\":"; json += pickupPersisted ? "true" : "false";
+  json += ",\"settings_revision\":"+String(pickupSettingsRevision);
   json += ",\"fields\":[";
   const PickupSettings defaults;
   for (unsigned i=0;i<PICKUP_FIELD_COUNT;++i) {
     const auto &f = pickupFields[i]; if(i)json+=',';
     json += "{\"key\":\"" + String(f.key) + "\",\"label\":\"" + String(f.label) + "\",\"unit\":\"" + String(f.unit) + "\"";
     json += ",\"min\":"+String(f.min,4)+",\"max\":"+String(f.max,4)+",\"step\":"+String(f.step,4);
-    json += ",\"value\":"+String(pickup.settings.*(f.member),4)+",\"default\":"+String(defaults.*(f.member),4)+'}';
+    json += ",\"value\":"+String(pickup.settings.*(f.member),4)+",\"default\":"+String(defaults.*(f.member),4);
+    json += ",\"display_unit\":\"";json += String(f.unit)=="rad/s"?"deg/s":f.unit;
+    json += "\",\"display_scale\":"+String(String(f.unit)=="rad/s"?57.29577951308232:1.0,10)+'}';
   }
   json += "]}"; server.sendHeader("Cache-Control","no-store"); server.send(200,"application/json",json);
 }
@@ -145,7 +167,7 @@ bool savePickupSettings(const PickupSettings &settings) {
   if (!prefs.begin("pickup",false)) return false;
   const bool ok = prefs.putBytes("settings",&stored,sizeof(stored)) == sizeof(stored);
   prefs.end();
-  if (ok) { pickup.configure(settings); pickupPersisted = true; }
+  if (ok) { pickup.configure(settings); pickupPersisted = true; ++pickupSettingsRevision; }
   return ok;
 }
 

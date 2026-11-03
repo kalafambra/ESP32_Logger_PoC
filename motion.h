@@ -18,6 +18,10 @@ struct MotionReport {
 MotionReport motionLatest, motionReports[MOTION_HISTORY_SIZE];
 unsigned motionHead = 0, motionHistoryCount = 0, motionSamples = 0;
 float motionSum[3] = {}, motionMin[3] = {}, motionMax[3] = {};
+float motionGyroSum[3] = {}, motionGyroMean[3] = {};
+float motionGyroBias[3] = {};
+bool motionGyroCalibrating = false;
+double gyroCalibrationSum[3] = {}, gyroCalibrationSquares[3] = {};
 bool motionReady = false, motionPaused = false, motionWindowFailed = false, motionSettled = false;
 uint32_t motionLastReport = 0, motionLastService = 0, motionOverflowCount = 0;
 uint32_t motionLastDiagnostic = 0, motionStartedAt = 0;
@@ -133,6 +137,11 @@ void setupMotion() {
       for (float value : saved) if (!isfinite(value) || fabsf(value) > 4.0f) valid = false;
       if (valid) for (unsigned i = 0; i < 3; ++i) motionBias[i] = saved[i];
     }
+    float savedGyro[3];
+    if(calibration.getBytesLength("gyro-v1")==sizeof(savedGyro)&&calibration.getBytes("gyro-v1",savedGyro,sizeof(savedGyro))==sizeof(savedGyro)){
+      bool valid=true;for(float value:savedGyro)if(!isfinite(value)||fabsf(value)>0.35f)valid=false;
+      if(valid)for(unsigned i=0;i<3;++i)motionGyroBias[i]=savedGyro[i];
+    }
     calibration.end();
   }
   motionStartedAt = motionLastReport = millis();
@@ -150,7 +159,7 @@ void pauseMotion() {
 /* Recover from a failed OTA transfer without mixing pre-transfer and post-transfer samples. */
 void resumeMotion() {
   motionSamples = 0;
-  for (unsigned i = 0; i < 3; ++i) motionSum[i] = 0;
+  for (unsigned i = 0; i < 3; ++i) motionSum[i] = motionGyroSum[i] = 0;
   motionWindowFailed = true;
   motionError = "Acquisition interrupted by OTA";
   motionLastReport = millis();
@@ -167,8 +176,32 @@ void motionFault(const char *message) {
   if (!resetMotionFifo()) motionError = "MPU6050 I2C/FIFO recovery failed";
 }
 
+/* Measure zero-rate bias in any stationary pose; acceleration variance rejects visible movement. */
+void finishGyroCalibration() {
+  motionCalibrating=false;
+  float proposed[3];
+  for(unsigned i=0;i<3;++i){
+    const double a=motionCalibrationSum[i]/motionCalibrationSamples;
+    const double g=gyroCalibrationSum[i]/motionCalibrationSamples;
+    if(motionCalibrationSquares[i]/motionCalibrationSamples-a*a>0.0225||
+       gyroCalibrationSquares[i]/motionCalibrationSamples-g*g>0.0001){motionCalibrationError="Module moved; keep still during gyro calibration";return;}
+    proposed[i]=g;
+    if(fabsf(proposed[i])>0.35f){motionCalibrationError="Gyro bias too large; confirm stationary module";return;}
+  }
+  Preferences prefs;
+  if(!prefs.begin("mpu6050",false)){motionCalibrationError="Cannot open calibration storage";return;}
+  const bool saved=prefs.putBytes("gyro-v1",proposed,sizeof(proposed))==sizeof(proposed);prefs.end();
+  if(!saved){motionCalibrationError="Cannot save gyro calibration";return;}
+  for(unsigned i=0;i<3;++i){motionGyroBias[i]=proposed[i];motionGyroSum[i]=motionSum[i]=0;}
+  motionSamples=motionHistoryCount=motionHead=0;motionLatest=MotionReport{};
+  motionLastReport=millis();motionCalibrationError="";
+  invalidatePickup("Gyro calibration changed; learning fresh residual bias");
+  Serial.printf("[mpu] Saved gyro zero-rate bias: %.4f %.4f %.4f deg/s\n",proposed[0]*57.2957795f,proposed[1]*57.2957795f,proposed[2]*57.2957795f);
+}
+
 /* Measure constant bias only in the explicitly requested stationary, flat, Z-up pose. */
 void finishMotionCalibration() {
+  if(motionGyroCalibrating){finishGyroCalibration();return;}
   motionCalibrating = false;
   float mean[3], proposed[3];
   for (unsigned i = 0; i < 3; ++i) {
@@ -186,7 +219,7 @@ void finishMotionCalibration() {
   const bool stored = calibration.putBytes("bias-v1", proposed, sizeof(proposed)) == sizeof(proposed);
   calibration.end();
   if (!stored) { motionCalibrationError = "Cannot save calibration"; return; }
-  for (unsigned i = 0; i < 3; ++i) { motionBias[i] = proposed[i]; motionSum[i] = 0; }
+  for (unsigned i = 0; i < 3; ++i) { motionBias[i] = proposed[i]; motionSum[i] = motionGyroSum[i] = 0; }
   // Clear old uncorrected motion history and the window straddling the change.
   motionSamples = 0; motionHistoryCount = 0; motionHead = 0; motionLatest = MotionReport{};
   motionLastReport = millis(); motionCalibrationError = "";
@@ -198,10 +231,21 @@ void finishMotionCalibration() {
 void startMotionCalibration() {
   if (!motionReady || motionPaused || motionCalibrating) { server.send(409, "application/json", "{\"error\":\"Sensor unavailable or calibration already running\"}"); return; }
   motionCalibrationSamples = 0;
+  motionGyroCalibrating=false;
   for (unsigned i = 0; i < 3; ++i) motionCalibrationSum[i] = motionCalibrationSquares[i] = 0;
   motionCalibrationError = ""; motionCalibrating = true;
   invalidatePickup("Accelerometer calibration in progress");
   server.send(202, "application/json", "{\"status\":\"Keep module flat, stationary, positive Z up for five seconds\"}");
+}
+
+/* Gyro calibration requires stillness, not a specific orientation, and never changes accelerometer offsets. */
+void startGyroCalibration() {
+  if(!motionReady||motionPaused||motionCalibrating){server.send(409,"application/json","{\"error\":\"Sensor unavailable or calibration already running\"}");return;}
+  motionCalibrationSamples=0;
+  for(unsigned i=0;i<3;++i)motionCalibrationSum[i]=motionCalibrationSquares[i]=gyroCalibrationSum[i]=gyroCalibrationSquares[i]=0;
+  motionCalibrationError="";motionGyroCalibrating=motionCalibrating=true;
+  invalidatePickup("Gyroscope calibration in progress");
+  server.send(202,"application/json","{\"status\":\"Keep module completely stationary for five seconds\"}");
 }
 
 /* Publish a one-second aggregate instead of flooding serial and Wi-Fi with 100 raw frames/s. */
@@ -215,6 +259,9 @@ void publishMotion(uint32_t now) {
   motionLatest.error = motionLatest.ok ? "" : motionWindowFailed || !motionReady ? motionError : "No samples or delayed one-second report";
   for (unsigned i = 0; i < 3; ++i) {
     motionLatest.mean[i] = motionSamples ? motionSum[i] / motionSamples : 0;
+    // Display sensor-frame gyro means separately from the detector's learned zero-rate bias.
+    motionGyroMean[i] = motionSamples ? motionGyroSum[i] / motionSamples : 0;
+    motionGyroSum[i] = 0;
     motionLatest.minimum[i] = motionMin[i]; motionLatest.maximum[i] = motionMax[i];
     motionSum[i] = 0;
   }
@@ -270,6 +317,9 @@ void acquireMotion() {
               detectorA[axis] = corrected;
               const int32_t gyro = decodeMotionRaw(data[offset+6],data[offset+7]);
               detectorW[axis] = gyro * (3.14159265358979323846f / (180.0f * 131.0f)); // +/-250 deg/s -> rad/s.
+              if(motionCalibrating&&motionGyroCalibrating){gyroCalibrationSum[axis]+=detectorW[axis];gyroCalibrationSquares[axis]+=double(detectorW[axis])*detectorW[axis];}
+              detectorW[axis]-=motionGyroBias[axis]; // Persisted zero-rate correction, also used by pickup baseline learning.
+              motionGyroSum[axis] += detectorW[axis];
               motionSum[axis] += corrected;
               if (!motionSamples || corrected < motionMin[axis]) motionMin[axis] = corrected;
               if (!motionSamples || corrected > motionMax[axis]) motionMax[axis] = corrected;
@@ -308,6 +358,13 @@ void appendMotion(String &json, uint32_t now) {
   json += "\",\"sample_count\":" + String(motionLatest.samples) + ",\"target_hz\":100,\"publish_interval_ms\":1000";
   json += ",\"interrupts_seen\":" + String(interrupts) + ",\"fifo_overflows\":" + String(motionOverflowCount);
   json += ",\"acceleration_m_s2\":"; motionArray(json, motionLatest.mean, valid);
+  json += ",\"gyroscope_rad_s\":"; motionArray(json, motionGyroMean, valid);
+  float degrees[3],rawDegrees[3],biasDegrees[3];
+  for(unsigned i=0;i<3;++i){degrees[i]=motionGyroMean[i]*57.2957795f;biasDegrees[i]=motionGyroBias[i]*57.2957795f;rawDegrees[i]=degrees[i]+biasDegrees[i];}
+  json+=",\"gyroscope_deg_s\":";motionArray(json,degrees,valid);
+  json+=",\"gyroscope_raw_deg_s\":";motionArray(json,rawDegrees,valid);
+  json+=",\"gyro_bias_deg_s\":";motionArray(json,biasDegrees,true);
+  json+=",\"calibration_kind\":\"";json+=motionGyroCalibrating?"gyro":"accel";json+='"';
   json += ",\"minimum_m_s2\":"; motionArray(json, motionLatest.minimum, valid);
   json += ",\"maximum_m_s2\":"; motionArray(json, motionLatest.maximum, valid);
   json += ",\"bias_m_s2\":"; motionArray(json, motionBias, true);

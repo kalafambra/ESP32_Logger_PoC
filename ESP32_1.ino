@@ -10,6 +10,7 @@
 #include "fox_image.h"
 #include "aggregation.h"
 #include "pickup_io.h"
+#include "pickup_tuning.h"
 #include "motion.h"
 
 Adafruit_BME280 bme;
@@ -357,7 +358,13 @@ void setup() {
   server.on("/api/motion", HTTP_GET, sendMotionReadings);
   server.on("/api/motion/diagnostics", HTTP_GET, sendMotionDiagnostics);
   server.on("/api/motion/calibrate", HTTP_POST, startMotionCalibration);
+  server.on("/api/motion/calibrate-gyro", HTTP_POST, startGyroCalibration);
   server.on("/api/pickup/settings", HTTP_GET, sendPickupSettings);
+  server.on("/api/pickup/debug", HTTP_GET, sendPickupDebug);
+  server.on("/pickup", HTTP_GET, []() {
+    server.sendHeader("Cache-Control","no-store");
+    server.send_P(200,"text/html; charset=utf-8",PICKUP_TUNING_HTML);
+  });
   server.on("/api/pickup/status", HTTP_GET, sendPickupStatus);
   server.on("/api/pickup/settings", HTTP_POST, updatePickupSettings);
   server.on("/api/pickup/defaults", HTTP_POST, restorePickupDefaults);

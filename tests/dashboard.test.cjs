@@ -1,4 +1,4 @@
-﻿// Run with Node.js: node tests/dashboard.test.cjs
+// Run with Node.js: node tests/dashboard.test.cjs
 const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
@@ -25,13 +25,14 @@ let failSettings=false;
 const settingsPosts=[];
 const pickupConfig={persisted:false,fields:[
  {key:'stationary_ms',label:'Stationary duration',unit:'ms',min:500,max:10000,step:10,value:3000,default:3000},
- {key:'accel_trigger',label:'Acceleration trigger',unit:'m/s²',min:0.05,max:10,step:0.01,value:0.6,default:0.6}
+ {key:'accel_trigger',label:'Acceleration trigger',unit:'m/s²',min:0.05,max:10,step:0.01,value:0.6,default:0.6},
+ {key:'stationary_gyro',label:'Stationary rotation',unit:'rad/s',display_unit:'deg/s',display_scale:180/Math.PI,min:0.005,max:0.3,step:0.005,value:0.05,default:0.05}
 ]};
 const point=(sequence,age_ms=10,ok=true)=>({sequence,age_ms,ok,sample_count:5,
   temperature_c:ok?[23,22,24]:[null,null,null],humidity_pct:ok?[45,44,46]:[null,null,null],pressure_hpa:ok?[1000,999,1001]:[null,null,null]});
 let response={sequence:1,default_altitude_m:0,uptime_ms:5000,sample_age_ms:10,sample_count:5,
   sensor_ok:true,wifi_connected:true,rssi_dbm:-50,temperature_c:23,humidity_pct:45,pressure_hpa:1000,error:'',history:[point(1)],
-  motion:{sequence:1,sample_age_ms:20,ok:true,error:'',acceleration_m_s2:[0.1,-0.2,9.81]}};
+  motion:{sequence:1,sample_age_ms:20,ok:true,error:'',acceleration_m_s2:[0.1,-0.2,9.81],gyroscope_rad_s:[0.01,-0.02,0.003]}};
 const context=vm.createContext({document,window:{devicePixelRatio:1,addEventListener(){},confirm(){return true;}},
   performance:{now:()=>now},AbortController,URLSearchParams,setTimeout(fn,ms){scheduled.push(ms);return 1;},clearTimeout(){},setInterval(){},
     fetch:async (url,options)=>{
@@ -56,9 +57,11 @@ async function main(){
   vm.runInContext(script,context);await new Promise(resolve=>setImmediate(resolve));
   assert.equal(elements.get('temperature').textContent,'23.00');
   assert.equal(elements.get('pickup-stationary_ms').value,'3000','runtime metadata populates settings');
+  assert.ok(Math.abs(Number(elements.get('pickup-stationary_gyro').value)-0.05*180/Math.PI)<1e-8,'gyro settings displayed in degrees');
   elements.get('pickup-stationary_ms').value='4000';
   await elements.get('pickupSettingsForm').submit({preventDefault(){}});
   assert.match(settingsPosts.at(-1).body,/stationary_ms=4000/);
+  assert.ok(Math.abs(Number(new URLSearchParams(settingsPosts.at(-1).body).get('stationary_gyro'))-0.05)<1e-8,'gyro form posts internal radians');
   assert.equal(elements.get('pickup-stationary_ms').value,'4000');
   const posts=settingsPosts.length;
   elements.get('pickup-stationary_ms').value='';
@@ -79,6 +82,8 @@ async function main(){
   assert.equal(read('history.length'),1);
   assert.equal(read('motionHistory.length'),1);
   assert.match(elements.get('motionValues').textContent,/Z: 9.810/);
+  assert.match(elements.get('gyroValues').textContent,/Y: -1.146/);
+  assert.match(elements.get('gyroValues').textContent,/deg\/s/);
   assert.equal(read('motionHistory[0].a[1]'),-0.2,'signed acceleration preserved');
   assert.ok(scheduled.filter(ms=>ms===1000).length>=2,'both polling streams scheduled at 1 Hz');
   assert.ok(!scheduled.includes(100),'no remaining 10 Hz polling');
@@ -104,6 +109,7 @@ async function main(){
   response.motion={sequence:2,sample_age_ms:0,ok:false,error:'MPU6050 I2C read failed',acceleration_m_s2:[null,null,null]};
   await read('pollMotion()');
   assert.match(elements.get('motionError').textContent,/I2C read failed/);
+  assert.equal(elements.get('gyroValues').textContent,'\u2014','gyro values clear on sensor error');
   assert.equal(read('motionHistory[1].a'),null,'failed MPU sample creates graph gap');
   const environmentalCount=read('history.length');
   const burst={uptime_ms:26000,motion:{sequence:12,ok:true,sample_count:100,fifo_overflows:2,warning:'No INT edges',acceleration_m_s2:[1,-2,9]},
@@ -117,6 +123,8 @@ async function main(){
   read('consumeMotion('+JSON.stringify(burst)+',performance.now())');
   assert.equal(read('motionHistory.length'),12,'batch backfill remains deduplicated');
   assert.equal(read('history.length'),environmentalCount,'motion updates do not alter BME history');
+  read('consumeMotion('+JSON.stringify({...burst,motion:{...burst.motion,gyroscope_deg_s:[1,-2,3]}})+',performance.now())');
+  assert.match(elements.get('gyroValues').textContent,/X: 1.000/,'degree API values are not converted twice');
   const calibrating={...burst,motion:{...burst.motion,calibrating:true,calibration_samples:250}};
   read('consumeMotion('+JSON.stringify(calibrating)+',performance.now())');
   assert.equal(elements.get('motionCalibrate').disabled,true);
@@ -149,3 +157,4 @@ async function main(){
   console.log('PASS: dashboard graphs, calibration, pickup settings/status, validation, backfill and retention');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
+

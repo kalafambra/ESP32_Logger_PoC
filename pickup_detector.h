@@ -26,13 +26,21 @@ class PickupDetector {
   bool active = false, armed = false;
   float accelDeviation = 0, tiltDegrees = 0, rotationRate = 0;
   float accelRms = 0, gyroRms = 0, baselineNoise = 0;
+  float rawMagnitude = 0, filteredMagnitude = 0, baselineMagnitude = 0, instantaneousRotation = 0;
+  bool referenceValid = false, quietWindowEvaluated = false;
+  unsigned triggerEvidenceMs = 0;
   uint32_t events = 0;
   unsigned candidateMs = 0;
+  // Trigger bits: acceleration=1, tilt=2, filtered rotation=4.
+  // Quiet blockers: acceleration RMS=1, instantaneous rotation=2, gyro RMS=4.
+  uint8_t triggerMask = 0, confirmedTriggerMask = 0, quietBlockMask = 0;
 
   /* Reset incomplete evidence on faults/configuration changes; an active alert survives. */
   void reset(bool preserveAlert = true) {
     if (!preserveAlert) { active = false; gyroKnown = false; events = 0; }
     armed = false; filtered = false; candidateMs = 0;
+    referenceValid = false; quietWindowEvaluated = false; triggerEvidenceMs = 0;
+    triggerMask = confirmedTriggerMask = quietBlockMask = 0;
     accelDeviation = tiltDegrees = rotationRate = accelRms = gyroRms = 0;
     clearWindow();
   }
@@ -54,12 +62,16 @@ class PickupDetector {
       fw[i] = filtered ? fw[i] + alpha * (w[i] - fw[i]) : w[i];
     }
     filtered = true;
+    // Telemetry must keep updating during an alert, not freeze at the trigger frame.
+    updateFeatures(a,w);
+    triggerEvidenceMs = 0; quietWindowEvaluated = false; quietBlockMask = 0;
+    const float accelLimit = std::fmax(settings.accel_trigger, baselineNoise * settings.noise_multiplier);
+    triggerMask = referenceValid ? ((accelDeviation > accelLimit ? 1 : 0) |
+      (tiltDegrees > settings.tilt_deg ? 2 : 0) | (rotationRate > settings.gyro_trigger ? 4 : 0)) : 0;
 
     // BLOCK 2: collect a continuous low-variance window at the CURRENT orientation.
     // A rotation above the stillness limit or excessive variance restarts quiet evidence.
-    float instantaneousRotation = 0;
-    for (unsigned i = 0; i < 3; ++i) instantaneousRotation += square(w[i] - (gyroKnown ? gyroBias[i] : 0));
-    if (std::sqrt(instantaneousRotation) > settings.stationary_gyro) clearWindow();
+    if (instantaneousRotation > settings.stationary_gyro) { quietBlockMask = 2; clearWindow(); }
     else {
       addWindow(a, w);
       double av = sumA2, gv = sumW2;
@@ -71,37 +83,32 @@ class PickupDetector {
       }
       accelRms = std::sqrt(av > 0 ? av / count : 0);
       gyroRms = std::sqrt(gv > 0 ? gv / count : 0);
-      if (accelRms > settings.stationary_accel_rms || gyroRms > settings.stationary_gyro) clearWindow();
+      quietWindowEvaluated = true;
+      quietBlockMask = (accelRms > settings.stationary_accel_rms ? 1 : 0) |
+        (gyroRms > settings.stationary_gyro ? 4 : 0);
+      if (quietBlockMask) clearWindow();
     }
 
     // BLOCK 3: arm after stillness; an active alert clears only after a NEW full quiet window.
     const unsigned required = windowSize();
     if ((active || !armed) && count >= required) {
       learnBaseline();
+      updateFeatures(a,w);
       active = false; armed = true; candidateMs = 0;
+      triggerMask = 0;
       return;
     }
     if (active || !armed) return;
 
     // BLOCK 4: compare against a frozen stationary reference, so slow tilts are not learned away.
-    float a2 = 0, b2 = 0, dot = 0, w2 = 0;
-    for (unsigned i = 0; i < 3; ++i) {
-      a2 += square(fa[i]); b2 += square(baseline[i]); dot += fa[i] * baseline[i];
-      w2 += square(fw[i] - gyroBias[i]);
-    }
-    accelDeviation = std::fabs(std::sqrt(a2) - std::sqrt(b2));
-    rotationRate = std::sqrt(w2);
-    float cosine = (a2 > 0.01f && b2 > 0.01f) ? dot / std::sqrt(a2 * b2) : 1;
-    if (cosine > 1) cosine = 1; if (cosine < -1) cosine = -1;
-    tiltDegrees = std::acos(cosine) * (180.0f / 3.14159265358979323846f);
-    const float adaptive = baselineNoise * settings.noise_multiplier;
-    const float accelLimit = adaptive > settings.accel_trigger ? adaptive : settings.accel_trigger;
-    const bool trigger = accelDeviation > accelLimit || tiltDegrees > settings.tilt_deg || rotationRate > settings.gyro_trigger;
+    const bool trigger = triggerMask != 0;
 
     // BLOCK 5: reject short spikes; only continuous threshold exceedance confirms pickup.
     candidateMs = trigger ? candidateMs + SAMPLE_MS : 0;
+    triggerEvidenceMs = candidateMs; // Preserve the confirming value before candidateMs resets.
     if (candidateMs >= settings.trigger_ms) {
       active = true; ++events; candidateMs = 0;
+      confirmedTriggerMask = triggerMask; // Freeze the actual confirming-frame causes for diagnostics.
       clearWindow(); // A pre-pickup quiet window must never immediately clear the alert.
     }
   }
@@ -115,6 +122,22 @@ class PickupDetector {
 
   /* Squared norms avoid costly square roots while updating statistics. */
   static float square(float value) { return value * value; }
+
+  /* Refresh live features even while learning/alerting; reference-dependent plots use referenceValid. */
+  void updateFeatures(const float *a,const float *w) {
+    float raw2=0,a2=0,b2=0,dot=0,w2=0,rawW2=0;
+    for(unsigned i=0;i<3;++i){
+      raw2+=square(a[i]);a2+=square(fa[i]);b2+=square(baseline[i]);dot+=fa[i]*baseline[i];
+      const float bias=gyroKnown?gyroBias[i]:0;
+      w2+=square(fw[i]-bias);rawW2+=square(w[i]-bias);
+    }
+    rawMagnitude=std::sqrt(raw2);filteredMagnitude=std::sqrt(a2);baselineMagnitude=std::sqrt(b2);
+    instantaneousRotation=std::sqrt(rawW2);rotationRate=std::sqrt(w2);
+    accelDeviation=std::fabs(filteredMagnitude-baselineMagnitude);
+    float cosine=(a2>0.01f&&b2>0.01f)?dot/std::sqrt(a2*b2):1;
+    if(cosine>1)cosine=1;if(cosine< -1)cosine=-1;
+    tiltDegrees=std::acos(cosine)*(180.0f/3.14159265358979323846f);
+  }
 
   /* Sampling cadence turns the runtime duration into a bounded number of raw frames. */
   unsigned windowSize() const {
@@ -148,5 +171,6 @@ class PickupDetector {
   void learnBaseline() {
     for (unsigned i = 0; i < 3; ++i) { baseline[i] = sumA[i] / count; gyroBias[i] = sumW[i] / count; }
     baselineNoise = accelRms; gyroKnown = true;
+    referenceValid = true;
   }
 };

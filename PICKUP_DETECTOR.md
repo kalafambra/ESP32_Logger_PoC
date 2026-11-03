@@ -167,3 +167,138 @@ and alert UI. Physical pickup sensitivity, false-positive rejection and visible
 LED timing still require the manual tests above; they are not established by
 these API/self-test results. Sensor calibration restoration across the update
 was retained; no automatic flat-pose recalibration was performed.
+
+## Pickup tuning lab
+
+Open **http://<device-IP>/pickup** (currently http://192.168.50.83/pickup), or
+follow the main dashboard's tuning link. This separate, self-contained page
+includes the same persistent settings API plus 13 debug plot groups:
+
+1. Acceleration departure, fixed trigger, adaptive noise trigger and effective max.
+2. Noise-normalized departure, noise multiplier and effective required ratio.
+3. Tilt angle and trigger threshold.
+4. Filtered rotation rate and trigger threshold.
+5. Stationary acceleration RMS and quiet threshold.
+6. Instantaneous rotation, quiet-window gyro RMS and stationary rotation limit.
+7. Accumulated quiet duration and required stationary duration.
+8. Continuous trigger evidence and required persistence.
+9. Raw/filtered acceleration magnitudes and frozen resting reference.
+10. Peak sample-delivery gap, current sample age, allowed gap and filter time constant.
+11. Pickup/armed/commanded-LED state.
+12. Observed commanded blink period versus configured period.
+13. Observed commanded duty cycle versus configured duty cycle.
+
+Smoothing is a filter coefficient rather than a direct trigger: compare raw and
+filtered traces in plot 9 while its configured time constant is plotted in 10.
+LED observations refer to firmware-command transitions, not an electrical pin
+measurement. They are unavailable until a complete active blink cycle is seen.
+If the stationary gyro gate skips RMS evaluation, RMS plots show a gap rather
+than an obsolete value; instantaneous rotation explains the rejection.
+Reference-dependent features are unavailable until a baseline is learned.
+
+Firmware captures at 20 Hz, plus immediate threshold/gate crossings and state/LED/settings changes. Requests
+fetch bounded batches at 5 Hz. Capture is leased for three seconds after each
+debug request and stops when no tuning client is requesting it; the detector
+itself still evaluates every 100 Hz frame. The on-demand, fixed-capacity debug ring holds 128
+records (~6.4 s at 20 Hz, less with extra edges). Its heap buffer is allocated only for a tuning client and released after the three-second lease expires; allocation failure returns HTTP 503 without disturbing detection.
+The browser retains up to 600 s; choose 15/30/60/120/600 s view windows. The
+60-second default is easier for trigger tuning. Missing sequence/time intervals
+are drawn as gaps. Shorter histories fill the width. Pause capture freezes
+requests/plots and eventually releases the subscription; resuming after buffer
+loss shows gaps rather than fabricated history. Clear plots affects this tab
+only. CSV exports the retained telemetry and the historical threshold values.
+
+Each record snapshots the actual thresholds used at that time. Editing a form
+alone never changes graph thresholds. Saving applies validated settings and
+restarts baseline learning; past plotted thresholds do not change retroactively.
+Settings revision changes from another page are reported without overwriting
+unsaved inputs. Reload saved settings explicitly to reconcile the form.
+
+GET /api/pickup/debug?since=N returns current pickup status, settings_revision,
+oldest/latest sequence, named columns and compact numeric rows. It returns at
+most 24 records/request to bound JSON work. Invalid/unavailable metrics serialize
+as null. Sequence and uptime identify reboot/reset; the browser clears old data
+on reboot. Time is ESP32 processing uptime: FIFO delivery batching can shift
+feature timing relative to when physical samples were generated. The gap chart
+shows delivery timing, not the MPU's fixed 10 ms sample period.
+
+Files: pickup_tuning.h contains the page; pickup_debug.h contains bounded
+capture/serialization. pickup_io.h integrates subscription and settings revision.
+The core now refreshes diagnostic features even while alerting, preserves the
+confirming trigger-persistence value for capture, and flags skipped RMS updates.
+The existing detector thresholds and decision logic are unchanged. Startup
+self-tests include live-feature behavior during alerts. Run
+`node tests/pickup-tuning.test.cjs` for page/schema/history/settings tests and
+`node tests/dashboard.test.cjs` for the main dashboard regression tests.
+
+
+
+Tuning-lab deployment verification: compilation passed (1194795 flash bytes,
+91% of application slot; 119736 static RAM bytes, 36%). OTA succeeded. The
+page returned HTTP 200, and live polling collected 160 records with 37 named
+columns, including every configurable threshold/timing parameter. Updated
+algorithm self-tests passed. During the check, free heap was at least 99176
+bytes and the largest free block at least 42996 bytes. After a 3.7 s pause,
+the next request observed an empty/released history buffer, confirming lease
+expiry. Final sensor checks showed valid motion with 100 samples/report,
+valid BME with five readings/report and zero FIFO overflows. Detector status
+can briefly return to baseline learning if the configured acquisition-gap
+limit is exceeded; use the gap plot to diagnose it. Browser layout/interaction
+and deliberately induced pickup/LED traces still need user verification.
+
+## Persistent gyro zero-rate calibration and display units
+
+The main dashboard now has **Calibrate gyro (keep stationary)**. It collects
+500 raw gyro frames (~5 s), checks acceleration and gyro variance for movement,
+and stores each axis's mean zero-rate offset in NVS (mpu6050 / gyro-v1).
+The module can be in any fixed orientation; unlike accelerometer calibration,
+it need not be flat or Z-up. It must genuinely remain stationary: steady yaw
+rotation can look like a constant bias and must not be used for calibration.
+Gyro calibration never overwrites accelerometer bias. New bias is applied only
+if validation and storage succeed. Excessive bias, sensor errors or OTA abort it.
+Repeated calibration estimates the full raw bias, not a second subtraction of
+an already-corrected value. Offsets restore at boot and apply to both current
+readouts and detector input; the detector still learns small residual gyro bias
+from stationary baselines.
+
+Main gyro readouts use corrected one-second mean XYZ in **deg/s**. The tuning
+page's rotation plots, gyro settings and CSV columns also use deg/s. Wire API
+and stored detector settings remain rad/s for compatibility; settings metadata
+supplies display_unit/display_scale so the browser converts limits/values into
+deg/s and converts submissions back. No existing physical threshold changes.
+The API adds gyroscope_deg_s, gyroscope_raw_deg_s and gyro_bias_deg_s, retaining
+gyroscope_rad_s as the corrected SI-unit mean. Calibration kind/progress/errors
+share the existing motion status. POST /api/motion/calibrate-gyro starts the
+stationary calibration. Clear old motion history after success to avoid mixing
+corrected and uncorrected samples.
+
+Gyro calibration deployment: compilation/tests and OTA succeeded. The stationary
+500-frame measurement saved bias [-2.767,0.429,0.426] deg/s. Subsequent readings
+included [0.007,-0.004,-0.007] deg/s. A second OTA restart verified those offsets
+restored from NVS; corrected readings were [-0.031,0.037,-0.038] deg/s, valid
+with 100 samples/report. Accelerometer offsets remained [0.391,-0.399,1.372]
+m/s^2, detector self-tests passed, and both pages served the degree-unit UI.
+This removes zero-rate offset only, not gyro scale/axis errors or temperature
+drift; recalibrate after warm-up if necessary. Flash: 1199351 bytes (91%);
+static RAM: 119824 bytes (36%). No claim of perfect zero noise or absolute
+rotation accuracy is made.
+
+### Decision markers in the tuning lab
+
+The `/pickup` graphs now mark confirmed alerts in red and completed stationary
+clearing in green at matching timestamps. Trigger plots say `CAUSE` when their
+signal exceeded its limit on the confirming frame; `ALERT*` means another signal
+contributed instead. Confirmation requires continuous OR evidence for the
+configured persistence duration; it does not require the same signal throughout.
+The saved cause mask describes the confirming frame, not every earlier contributor.
+
+Amber `RESET` markers appear on relevant stationary plots when a firmware quiet
+blocker changes or begins. They identify acceleration RMS, instantaneous gyro,
+or gyro RMS rejection. The status panel reports the current blocker or the
+remaining quiet-window wait; the recent-event list gives causes and boot-relative
+timestamps. Tilt and departure relative to the old baseline do not block clearing
+in a new resting orientation. Trigger, blocker and event-counter snapshots are
+also included in debug JSON/CSV. Missing records do not imply inferred transitions.
+Markers require the tuning page to be capturing; they are not a persistent log.
+All thresholds and detector behavior remain unchanged. Physical pickup/clearing
+and visual browser verification remain manual checks after flashing this version.

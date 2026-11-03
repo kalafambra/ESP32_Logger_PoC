@@ -262,3 +262,24 @@ and the final live state was armed with the dedicated LED timer available and
 no sensor errors/overflows in three checks. The temporary persistence-test
 setting was restored to its original value. See PICKUP_DETECTOR.md for details.
 Physical pickup and LED timing remain manual verification tasks.
+
+Pickup tuning page: open /pickup for persistent configuration and live plots of
+all thresholded signals, filtering/timing and LED timing. It includes historical
+threshold overlays, pause/clear controls and CSV export. See PICKUP_DETECTOR.md
+for sampling, buffering and signal interpretation details.
+
+Main-dashboard gyro readout: XYZ one-second means now appear immediately below
+acceleration, in rad/s, before detector zero-rate bias subtraction. The motion
+API adds gyroscope_rad_s; invalid/stale readings are null and the browser clears
+the readout on errors. No extra gyro history buffer or graph is allocated.
+Compilation, dashboard/tuning tests and OTA upload passed. After reboot, GET /
+returned HTTP 200 with the gyro element, /api/motion returned valid gyro means
+[-0.047,0.004,0.002] rad/s with 100 samples, and detector self-tests passed.
+Flash: 1195427 bytes (91%); static RAM: 119760 bytes (36%). Browser appearance
+still requires user confirmation.
+
+Gyroscope update: use Calibrate gyro (keep stationary) for a five-second saved
+zero-rate calibration, independent of flat-pose accelerometer calibration.
+Gyro readouts, rotation debug plots, configuration controls and debug CSV now
+use deg/s. The API/stored detector settings retain rad/s, with display conversion
+metadata for compatibility. See PICKUP_DETECTOR.md for details and caveats.

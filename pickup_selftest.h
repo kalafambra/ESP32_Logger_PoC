@@ -18,7 +18,10 @@ inline bool runPickupSelfTests(PickupDetector &p) {
   feed(tilt,still,310); if(p.active||!p.armed)return false; // New orientation can become stationary.
   fresh(); feed(flat,still,300);
   const float spin[3]={0,0,0.5f}; feed(flat,spin,80); if(!p.active)return false;
+  if(!(p.confirmedTriggerMask&4)||p.quietBlockMask!=2)return false;
   feed(flat,spin,400); if(!p.active)return false; // Rotation cannot clear the alert.
+  if(p.quietMs()!=0||p.quietBlockMask!=2)return false; // Exact gate blocking clearing.
+  if(p.rotationRate<0.4f||p.quietWindowEvaluated)return false; // Live alert telemetry must not freeze.
   p.reset(); if(!p.active||p.armed)return false; // Sensor faults preserve alert.
   feed(flat,still,299); if(!p.active)return false;
   feed(flat,still,1); if(p.active||!p.armed)return false;
