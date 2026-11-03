@@ -50,8 +50,7 @@ BME addresses 0x76/0x77 do not conflict with MPU address 0x68. Some carrier
 boards have another LED pin/polarity or only a power LED; configure accordingly.
 
 The bus runs at **100 kHz**. This is sufficient for the reduced acquisition rate
-and gives more wiring margin than the former 400 kHz setting. The BME LED pulse
-is 100 ms on each valid reading so pulses remain visible at 5 Hz.
+and gives more wiring margin than the former 400 kHz setting. The LED is reserved exclusively for pickup detection; acquisition no longer drives it.
 
 ## Arduino IDE setup and initial USB upload
 
@@ -86,8 +85,7 @@ If changing OTA_PASSWORD, authenticate the update using the OLD password; the
 new one takes effect after reboot. Keep OTA support and working Wi-Fi in future
 firmware. USB remains the recovery method if the board cannot connect or boot.
 Use an OTA-capable partition scheme; No OTA/Huge APP schemes are unsuitable.
-During transfer, sampling/HTTP pause, the LED turns off and MPU FIFO generation
-is stopped. A failed transfer resets the FIFO and discards interrupted windows.
+During transfer, sampling/HTTP pause and MPU FIFO generation stops. The independent pickup LED timer continues an already-active alert. A failed transfer resets the FIFO and discards interrupted windows.
 A successful update reboots and clears device RAM history.
 
 If discovery fails, check the IP, same-LAN access, VPN/client isolation and
@@ -117,11 +115,11 @@ Each serial BME report includes current Wi-Fi status and IP, including errors.
 MPU uses DLPF=3 (44 Hz acceleration bandwidth) and sample divider=9 on the
 filtered 1 kHz clock, producing 100 Hz. Range is +/-2 g (16384 counts/g).
 The ISR only sets a flag and counts interrupt edges. I2C/aggregation run in the
-main loop, in batches up to 20 six-byte frames. A 5 ms safety poll handles lost
+main loop, in batches up to 10 twelve-byte accel+gyro frames. A 5 ms safety poll handles lost
 notifications; missing INT edges produce a warning. IRQ edges may coalesce and
 must not be mistaken for the exact raw sample count.
 
-The 1024-byte FIFO holds about 170 frames, now about **1.7 seconds** of buffering.
+The 1024-byte FIFO holds about 85 accel+gyro frames, now about **0.85 seconds** of buffering.
 The one-second motion report typically contains about 100 samples; counts vary
 with sensor clock tolerance and scheduling. FIFO frames are grouped by when
 they are drained, so backlog can add latency. Means smooth/cancel fast vibration;
@@ -179,7 +177,7 @@ After upload and browser refresh, manually verify:
    expand from short histories to 600 seconds.
 4. FIFO overflows stay zero and I2C error reports are absent over a longer run.
    Check with multiple tabs, network interruptions/backfill and OTA separately.
-5. BME LED pulses for 100 ms at 5 Hz; slow rotation changes the MPU axes, whose
+5. LED stays OFF while armed and blinks 1 Hz/50% during a pickup alert; slow rotation changes the MPU axes, whose
    stationary magnitude is roughly 9.81 m/s^2. Acceleration includes gravity.
 6. Altitude/dew point, fox image, Wi-Fi recovery and offline LAN operation work.
 
@@ -246,3 +244,21 @@ Three subsequent one-second reports were [0.003,0.003,9.806],
 [-0.001,0.002,9.808], and [0.003,0.000,9.810] m/s^2, all marked valid.
 Calibration storage write succeeded; restoration across a future reboot and
 accuracy in other orientations have not yet been physically verified.
+
+## Pickup detection and LED
+
+See [PICKUP_DETECTOR.md](PICKUP_DETECTOR.md) for the reviewed flow, algorithm
+blocks, defaults/limits, persistent dashboard settings, APIs and manual tests.
+The LED now belongs exclusively to pickup alerts: OFF normally, 1 Hz at 50%
+duty while alerting by default. Acquisition pulses have been removed. Alerts
+clear automatically after a fresh quiet window at the current orientation.
+Gyro data shares the existing 100 Hz FIFO (12-byte accel+gyro frames), with no
+new wiring or change to GPIO17. Motion/BME graph publication stays at 1 Hz.
+
+
+Pickup deployment validation: compilation/OTA succeeded; algorithm self-tests
+passed on the board, settings validation and reboot persistence were verified,
+and the final live state was armed with the dedicated LED timer available and
+no sensor errors/overflows in three checks. The temporary persistence-test
+setting was restored to its original value. See PICKUP_DETECTOR.md for details.
+Physical pickup and LED timing remain manual verification tasks.

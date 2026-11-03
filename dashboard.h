@@ -19,9 +19,12 @@ article{background:linear-gradient(135deg,#34242e,#2b1e27);border:1px solid #694
 .value{font-size:2.5rem;font-weight:650;letter-spacing:-.04em;font-variant-numeric:tabular-nums}.unit{font-size:1rem;color:#d6b9b8}canvas{width:100%;height:240px;display:block;margin-top:18px}#dewPoint{color:#ffd5a8}
 small{color:#cbaaaa}footer{margin:24px 0;color:#cbaaaa;font-size:.8rem;line-height:1.6}
 @media(max-width:540px){body{padding:20px 14px}.brand{gap:16px}.fox-mark{width:82px;height:82px;border-radius:18px}.brand p{font-size:.8rem}article{padding:18px}}
+.pickup-banner{padding:16px 20px;border:1px solid #94606a;border-radius:14px;margin:16px 0;font-weight:650}.pickup-banner.active{background:#6b263c;border-color:#ffb47f;color:#fff2e5}.pickup-settings{margin:20px 0;padding:18px;border:1px solid #69414a;border-radius:14px;background:#30212a}.pickup-settings summary{cursor:pointer;font-weight:650}.pickup-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin:20px 0}.pickup-fields label{display:flex;flex-direction:column;gap:7px;font-size:.85rem}.pickup-fields input{width:100%}.pickup-settings button{font:inherit;padding:10px 14px;border:1px solid #94606a;border-radius:8px;background:#48232d;color:#fff2e5;cursor:pointer;margin:4px}.pickup-settings button:disabled{opacity:.5;cursor:wait}
 </style>
 <header class="brand"><img class="fox-mark" src="/fox.png" alt="Pixel-art fox mascot" width="116" height="116"><div><div class="eyebrow">Fox den · Live environment</div><h1>Environmental monitor</h1><p>ESP32 + BME280 · BME280 5 readings/s · one-second reports</p></div></header>
 <div class="status" role="status" aria-live="polite"><div id="connection">Connecting to ESP32…</div><div id="detail">Waiting for sensor data</div><div id="error"></div></div>
+<div id="pickupStatus" class="pickup-banner" role="status" aria-live="polite">Pickup detector: waiting for sensor data</div>
+<details class="pickup-settings"><summary>Pickup detection settings</summary><p>Saved on the ESP32 and restored after reboot. Changing settings restarts baseline learning. An active alert clears only after confirmed stillness, including when held still in your hand.</p><form id="pickupSettingsForm"><div id="pickupFields" class="pickup-fields"></div><button id="pickupSave" type="submit" disabled>Save settings</button><button id="pickupDefaults" type="button" disabled>Restore defaults</button><p id="pickupSettingsStatus" role="status">Loading settings…</p></form></details>
 <div class="settings"><label for="altitude">Altitude above sea level (m)</label><input id="altitude" type="number" min="-500" max="9000" step="0.1" disabled aria-describedby="altitudeError"><span id="altitudeError" role="status"></span></div>
 <p>Dew point: <strong id="dewPoint">—</strong> °C <small>(calculated from one-second mean temperature and humidity)</small></p>
 <p>Solid line: mean of 5 readings. Faint lines (30% opacity): minimum and maximum.</p><main class="cards">
@@ -177,6 +180,7 @@ function consumeMotion(data,now){
   motionHistory.length=0;lastMotionSequence=null;
  }
  lastMotionUptime=data.uptime_ms;
+ updatePickupStatus(data.pickup);
  $('motionCalibrate').disabled=!!motion.calibrating;
  $('motionCalibrationStatus').textContent=motion.calibrating?'Calibrating: '+motion.calibration_samples+'/500 samples. Keep flat and still.':motion.calibration_error||'Calibration removes fixed bias; gravity is retained.';
  const ok=motion.ok&&Array.isArray(motion.acceleration_m_s2)&&motion.acceleration_m_s2.length===3&&motion.acceleration_m_s2.every(Number.isFinite);
@@ -214,15 +218,60 @@ $('motionCalibrate').addEventListener('click',async()=>{
   $('motionCalibrationStatus').textContent='Calibration starting. Keep flat and still for five seconds.';
  }catch(error){$('motionCalibrationStatus').textContent='Calibration failed: '+error.message;$('motionCalibrate').disabled=false;}
 });
+let pickupSettingFields=[];
+/* Keep server-provided labels as text rather than interpreting them as HTML. */
+function pickupEscape(value){return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+/* Reflect detector state independently of the one-second graph's mean values. */
+function updatePickupStatus(status){
+ if(!status)return;
+ const node=$('pickupStatus');node.className='pickup-banner'+(status.active?' active':'');
+ if(status.active)node.textContent='Sensor has been picked up — LED alert active. '+(status.error||'Waiting for '+(status.stationary_ms/1000)+' s of stillness.');
+ else if(status.state==='armed')node.textContent='Stationary · pickup detector armed';
+ else if(status.state==='learning_baseline')node.textContent='Learning stationary baseline: '+(status.quiet_ms/1000).toFixed(1)+' / '+(status.stationary_ms/1000)+' s';
+ else node.textContent='Pickup detector unavailable: '+(status.error||status.state);
+ if(!status.led_available)node.textContent+=' · LED unavailable';
+}
+/* Render settings and validation limits from firmware metadata to avoid diverging UI defaults. */
+function renderPickupSettings(data){
+ if(!Array.isArray(data.fields)||!data.fields.length)throw new Error('Invalid settings response');
+ for(const f of data.fields)if(!/^[a-z_]+$/.test(f.key)||![f.min,f.max,f.step,f.value].every(Number.isFinite))throw new Error('Invalid setting metadata');
+ pickupSettingFields=data.fields;
+ $('pickupFields').innerHTML=data.fields.map(f=>'<label for="pickup-'+f.key+'">'+pickupEscape(f.label)+' ('+pickupEscape(f.unit)+')<input id="pickup-'+f.key+'" name="'+f.key+'" type="number" required min="'+f.min+'" max="'+f.max+'" step="'+f.step+'"><small>Default: '+pickupEscape(f.default)+'</small></label>').join('');
+ for(const f of data.fields)$('pickup-'+f.key).value=String(f.value);
+ $('pickupSettingsStatus').textContent=data.persisted?'Settings saved on ESP32. Fresh stationary baseline required.':'Code defaults in use. Save to persist settings.';
+ $('pickupSave').disabled=false;$('pickupDefaults').disabled=false;
+}
+/* Return structured validation/storage errors instead of pretending failed saves took effect. */
+async function requestPickupSettings(options){
+ const response=await fetch('/api/pickup/'+(options?.defaults?'defaults':'settings'),options?.request||{cache:'no-store'});
+ const data=await response.json();if(!response.ok)throw new Error(data.error||'HTTP '+response.status);
+ renderPickupSettings(data);
+}
+/* Apply a complete form; firmware validates finite numbers and cross-field relationships again. */
+$('pickupSettingsForm').addEventListener('submit',async event=>{
+ event.preventDefault();$('pickupSave').disabled=true;$('pickupDefaults').disabled=true;
+ try{
+  const body=new URLSearchParams();
+  for(const f of pickupSettingFields){
+   const text=$('pickup-'+f.key).value.trim(),value=Number(text);
+   if(!text||!Number.isFinite(value)||value<f.min||value>f.max)throw new Error('Check '+f.label);
+   body.set(f.key,text);
+  }
+  await requestPickupSettings({request:{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()}});
+ }catch(error){$('pickupSettingsStatus').textContent='Not saved: '+error.message;}
+ finally{$('pickupSave').disabled=false;$('pickupDefaults').disabled=false;}
+});
+/* Restore defaults explicitly, preserving active alerts while the detector relearns stillness. */
+$('pickupDefaults').addEventListener('click',async()=>{
+ if(!window.confirm('Restore and save pickup defaults? An active alert still requires confirmed stillness.'))return;
+ $('pickupSave').disabled=true;$('pickupDefaults').disabled=true;
+ try{await requestPickupSettings({defaults:true,request:{method:'POST'}});}
+ catch(error){$('pickupSettingsStatus').textContent='Defaults not saved: '+error.message;}
+ finally{$('pickupSave').disabled=false;$('pickupDefaults').disabled=false;}
+});
+requestPickupSettings().catch(error=>{$('pickupSettingsStatus').textContent='Could not load settings: '+error.message;});
 window.addEventListener('resize',draw);
 setInterval(draw,1000);poll();pollMotion();
 </script>
 </html>
 )DASHBOARD";
-
-
-
-
-
-
-

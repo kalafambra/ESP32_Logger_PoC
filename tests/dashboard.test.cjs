@@ -21,14 +21,30 @@ const document = {getElementById(id) {
 }};
 let now=10000,fail=false,requested='';
 const scheduled=[];
+let failSettings=false;
+const settingsPosts=[];
+const pickupConfig={persisted:false,fields:[
+ {key:'stationary_ms',label:'Stationary duration',unit:'ms',min:500,max:10000,step:10,value:3000,default:3000},
+ {key:'accel_trigger',label:'Acceleration trigger',unit:'m/s²',min:0.05,max:10,step:0.01,value:0.6,default:0.6}
+]};
 const point=(sequence,age_ms=10,ok=true)=>({sequence,age_ms,ok,sample_count:5,
   temperature_c:ok?[23,22,24]:[null,null,null],humidity_pct:ok?[45,44,46]:[null,null,null],pressure_hpa:ok?[1000,999,1001]:[null,null,null]});
 let response={sequence:1,default_altitude_m:0,uptime_ms:5000,sample_age_ms:10,sample_count:5,
   sensor_ok:true,wifi_connected:true,rssi_dbm:-50,temperature_c:23,humidity_pct:45,pressure_hpa:1000,error:'',history:[point(1)],
   motion:{sequence:1,sample_age_ms:20,ok:true,error:'',acceleration_m_s2:[0.1,-0.2,9.81]}};
-const context=vm.createContext({document,window:{devicePixelRatio:1,addEventListener(){}},
-  performance:{now:()=>now},AbortController,setTimeout(fn,ms){scheduled.push(ms);return 1;},clearTimeout(){},setInterval(){},
-    fetch:async url=>{
+const context=vm.createContext({document,window:{devicePixelRatio:1,addEventListener(){},confirm(){return true;}},
+  performance:{now:()=>now},AbortController,URLSearchParams,setTimeout(fn,ms){scheduled.push(ms);return 1;},clearTimeout(){},setInterval(){},
+    fetch:async (url,options)=>{
+    if(url.startsWith('/api/pickup')){
+      if(options?.method==='POST'){
+        settingsPosts.push({url,body:options.body});
+        if(failSettings)return {ok:false,json:async()=>({error:'Storage unavailable'})};
+        if(url.endsWith('/defaults'))for(const f of pickupConfig.fields)f.value=f.default;
+        else {const values=new URLSearchParams(options.body);for(const f of pickupConfig.fields)f.value=Number(values.get(f.key));}
+        pickupConfig.persisted=true;
+      }
+      return {ok:true,json:async()=>pickupConfig};
+    }
     if(fail)throw new Error('Offline');
     if(url.startsWith('/api/motion'))return {ok:true,json:async()=>({uptime_ms:response.uptime_ms,motion:response.motion,
       history:[{sequence:response.motion.sequence,age_ms:response.motion.sample_age_ms,ok:response.motion.ok,a:response.motion.acceleration_m_s2}]})};
@@ -39,6 +55,27 @@ const read=expression=>vm.runInContext(expression,context);
 async function main(){
   vm.runInContext(script,context);await new Promise(resolve=>setImmediate(resolve));
   assert.equal(elements.get('temperature').textContent,'23.00');
+  assert.equal(elements.get('pickup-stationary_ms').value,'3000','runtime metadata populates settings');
+  elements.get('pickup-stationary_ms').value='4000';
+  await elements.get('pickupSettingsForm').submit({preventDefault(){}});
+  assert.match(settingsPosts.at(-1).body,/stationary_ms=4000/);
+  assert.equal(elements.get('pickup-stationary_ms').value,'4000');
+  const posts=settingsPosts.length;
+  elements.get('pickup-stationary_ms').value='';
+  await elements.get('pickupSettingsForm').submit({preventDefault(){}});
+  assert.equal(settingsPosts.length,posts,'invalid input does not POST');
+  assert.match(elements.get('pickupSettingsStatus').textContent,/Not saved/);
+  elements.get('pickup-stationary_ms').value='4000';failSettings=true;
+  await elements.get('pickupSettingsForm').submit({preventDefault(){}});
+  assert.match(elements.get('pickupSettingsStatus').textContent,/Storage unavailable/);
+  failSettings=false;await elements.get('pickupDefaults').click();
+  assert.equal(elements.get('pickup-stationary_ms').value,'3000','defaults restored from server');
+  read('updatePickupStatus({active:true,state:"picked_up",stationary_ms:3000,led_available:true})');
+  assert.match(elements.get('pickupStatus').textContent,/has been picked up/);
+  read('updatePickupStatus({active:false,state:"armed",led_available:true})');
+  assert.match(elements.get('pickupStatus').textContent,/Stationary/);
+  read('updatePickupStatus({active:true,state:"sensor_unavailable",error:"I2C failed",led_available:true})');
+  assert.match(elements.get('pickupStatus').textContent,/picked up.*I2C failed/);
   assert.equal(read('history.length'),1);
   assert.equal(read('motionHistory.length'),1);
   assert.match(elements.get('motionValues').textContent,/Z: 9.810/);
@@ -109,10 +146,6 @@ async function main(){
   read('history.length=0;history.push({at:performance.now(),sequence:1,t:[1,1,1],h:[1,1,1],p:[1000,1000,1000]})');
   now+=61000;read('draw()');assert.equal(read('history.length'),1,'history retained beyond 60 s');
   now+=540000;read('draw()');assert.equal(read('history.length'),0,'600-second expiry');
-  console.log('PASS: syntax, mean/min/max, 30% opacity, deduplication, backfill, errors, restart, history expiry');
+  console.log('PASS: dashboard graphs, calibration, pickup settings/status, validation, backfill and retention');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
-
-
-
-

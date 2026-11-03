@@ -9,7 +9,6 @@ constexpr uint8_t SCL_PIN = 22;
 constexpr int STATUS_LED_PIN = 2;
 constexpr uint8_t LED_ON = HIGH;
 constexpr uint32_t SAMPLE_INTERVAL_MS = 200;
-constexpr uint32_t LED_PULSE_MS = 100;
 
 
 
@@ -25,6 +24,3 @@ constexpr char OTA_PASSWORD[] = "";
 
 // MPU6050 INT: active-high data-ready interrupt, separate from the shared I2C bus.
 constexpr uint8_t MPU_INTERRUPT_PIN = 17;
-
-
-

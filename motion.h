@@ -66,10 +66,10 @@ bool motionWrite(uint8_t reg, uint8_t value) {
   return Wire.endTransmission() == 0;
 }
 
-/* Reset FIFO framing after errors; acceleration-only FIFO packets contain exactly six bytes. */
+/* Reset FIFO framing: accel XYZ then gyro XYZ, twelve bytes with temperature excluded. */
 bool resetMotionFifo() {
   return motionWrite(0x23, 0x00) && motionWrite(0x6A, 0x00) &&
-         motionWrite(0x6A, 0x04) && motionWrite(0x6A, 0x40) && motionWrite(0x23, 0x08);
+         motionWrite(0x6A, 0x04) && motionWrite(0x6A, 0x40) && motionWrite(0x23, 0x78);
 }
 
 /* A CPU/OTA restart does not power-cycle the sensor: reset its registers and signal paths explicitly. */
@@ -93,8 +93,8 @@ bool resetMotionDevice() {
 
 /* Verify scale, packet layout and timing rather than trusting acknowledged writes alone. */
 bool verifyMotionConfiguration() {
-  const uint8_t regs[] = {0x19, 0x1A, 0x1C, 0x23, 0x37, 0x38, 0x6A, 0x6B, 0x6C};
-  const uint8_t expected[] = {9, 3, 0, 8, 0x20, 0x11, 0x40, 1, 0};
+  const uint8_t regs[] = {0x19, 0x1A, 0x1B, 0x1C, 0x23, 0x37, 0x38, 0x6A, 0x6B, 0x6C};
+  const uint8_t expected[] = {9, 3, 0, 0, 0x78, 0x20, 0x11, 0x40, 1, 0};
   for (unsigned i = 0; i < sizeof(regs); ++i) {
     uint8_t actual;
     if (!motionRead(regs[i], &actual, 1)) return false;
@@ -118,7 +118,7 @@ void setupMotion() {
     // The filtered internal clock is 1 kHz; divider=9 yields 100 Hz.
     motionReady = motionWrite(0x38, 0x00) && motionWrite(0x6B, 0x01) &&
                   motionWrite(0x1A, 0x03) && motionWrite(0x19, 0x09) &&
-                  motionWrite(0x1C, 0x00) && motionWrite(0x37, 0x20) &&
+                  motionWrite(0x1B, 0x00) && motionWrite(0x1C, 0x00) && motionWrite(0x37, 0x20) &&
                   resetMotionFifo() && motionWrite(0x38, 0x11) && verifyMotionConfiguration();
     // INT_PIN_CFG: latch high until INT_STATUS is read. Enable ready + overflow IRQs.
   }
@@ -141,6 +141,7 @@ void setupMotion() {
 
 /* Suspend FIFO during OTA, since a firmware transfer intentionally blocks acquisition. */
 void pauseMotion() {
+  invalidatePickup("Acquisition paused for OTA; active alert retained");
   if (motionCalibrating) { motionCalibrating = false; motionCalibrationError = "Calibration cancelled by OTA"; }
   motionPaused = true;
   if (motionReady) { motionWrite(0x38, 0); motionWrite(0x23, 0); motionWrite(0x6A, 0); }
@@ -159,6 +160,7 @@ void resumeMotion() {
 
 /* Reset framing on bus/overflow faults and mark this report as incomplete rather than averaging bad data. */
 void motionFault(const char *message) {
+  invalidatePickup(message);
   if (motionCalibrating) { motionCalibrating = false; motionCalibrationError = "Calibration cancelled by sensor read error"; }
   motionWindowFailed = true;
   motionError = message;
@@ -188,6 +190,7 @@ void finishMotionCalibration() {
   // Clear old uncorrected motion history and the window straddling the change.
   motionSamples = 0; motionHistoryCount = 0; motionHead = 0; motionLatest = MotionReport{};
   motionLastReport = millis(); motionCalibrationError = "";
+  invalidatePickup("Calibration changed; waiting for fresh stationary baseline");
   Serial.printf("[mpu] Flat Z-up calibration saved: bias %.4f %.4f %.4f m/s^2\n", motionBias[0], motionBias[1], motionBias[2]);
 }
 
@@ -197,6 +200,7 @@ void startMotionCalibration() {
   motionCalibrationSamples = 0;
   for (unsigned i = 0; i < 3; ++i) motionCalibrationSum[i] = motionCalibrationSquares[i] = 0;
   motionCalibrationError = ""; motionCalibrating = true;
+  invalidatePickup("Accelerometer calibration in progress");
   server.send(202, "application/json", "{\"status\":\"Keep module flat, stationary, positive Z up for five seconds\"}");
 }
 
@@ -250,27 +254,33 @@ void acquireMotion() {
         motionFault("FIFO overflow; samples lost and FIFO reset");
       } else {
         // At 100 kHz, this worst-case batch takes about 12 ms; normal batches are smaller.
-        const unsigned frames = min(bytes / 6, 20u);
+        const unsigned frames = min(bytes / 12, 10u);
         if (frames) {
           uint8_t data[120];
-          if (!motionRead(0x74, data, frames * 6)) motionFault("MPU6050 FIFO read failed");
+          if (!motionRead(0x74, data, frames * 12)) motionFault("MPU6050 FIFO read failed");
           else for (unsigned frame = 0; frame < frames; ++frame) {
+            float detectorA[3], detectorW[3];
+            const bool wasCalibrating = motionCalibrating;
             for (unsigned axis = 0; axis < 3; ++axis) {
-              const unsigned offset = frame * 6 + axis * 2;
+              const unsigned offset = frame * 12 + axis * 2;
               const int32_t raw = decodeMotionRaw(data[offset], data[offset + 1]);
               const float value = raw * (9.80665f / 16384.0f); // +/-2 g, includes gravity.
               if (motionCalibrating) { motionCalibrationSum[axis] += value; motionCalibrationSquares[axis] += double(value) * value; }
               const float corrected = value - motionBias[axis]; // Constant bias subtraction, never normalization/clipping.
+              detectorA[axis] = corrected;
+              const int32_t gyro = decodeMotionRaw(data[offset+6],data[offset+7]);
+              detectorW[axis] = gyro * (3.14159265358979323846f / (180.0f * 131.0f)); // +/-250 deg/s -> rad/s.
               motionSum[axis] += corrected;
               if (!motionSamples || corrected < motionMin[axis]) motionMin[axis] = corrected;
               if (!motionSamples || corrected > motionMax[axis]) motionMax[axis] = corrected;
             }
             ++motionSamples;
             if (motionCalibrating && ++motionCalibrationSamples >= 500) finishMotionCalibration();
+            if (!wasCalibrating) processPickupSample(detectorA,detectorW,millis());
           }
         }
         // Keep draining a backlog on the next loop pass even if the IRQ was coalesced.
-        if (bytes / 6 > frames) {
+        if (bytes / 12 > frames) {
           portENTER_CRITICAL(&motionMux); motionInterruptPending = true; portEXIT_CRITICAL(&motionMux);
         }
       }
@@ -315,6 +325,7 @@ void sendMotionReadings() {
   String json; json.reserve(5000);
   json = "{\"uptime_ms\":" + String(now);
   appendMotion(json, now);
+  appendPickup(json);
   json += ",\"history\":[";
   unsigned sent = 0;
   for (unsigned i = 0; i < motionHistoryCount && sent < 20; ++i) {

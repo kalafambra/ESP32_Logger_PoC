@@ -9,14 +9,15 @@
 #include "dashboard.h"
 #include "fox_image.h"
 #include "aggregation.h"
+#include "pickup_io.h"
 #include "motion.h"
 
 Adafruit_BME280 bme;
 WebServer server(80);
 uint8_t sensorAddress = 0;
-bool sensorReady = false, converting = false, ledActive = false;
+bool sensorReady = false, converting = false;
 uint32_t lastStart = 0, conversionStart = 0, windowStart = 0;
-uint32_t ledStart = 0, lastReconnect = 0;
+uint32_t lastReconnect = 0;
 bool wifiRestartPending = false;
 bool otaConfigured = false, otaStarted = false;
 constexpr uint32_t WIFI_ATTEMPT_MS = 30000;
@@ -91,7 +92,7 @@ void failSample(const char *message) {
 /*
  * Advance a forced-conversion state machine at five readings per second.
  * Returning between trigger and read keeps the dashboard and OTA responsive.
- * Only validated measurements enter the average or generate an LED pulse.
+ * Only validated measurements enter the average; the LED belongs to pickup detection.
  */
 void acquireSensor() {
   if (!sensorReady) return;  // Initialization errors require a reset after repair.
@@ -150,12 +151,6 @@ void acquireSensor() {
   converting = false;
   // Accumulate full-precision readings; rounding happens only when reporting.
   window.add(temperatureC, humidityPct, pressureHpa);
-  // The timer in loop() turns this pulse off, independently of publication.
-  if (STATUS_LED_PIN >= 0) {
-    digitalWrite(STATUS_LED_PIN, LED_ON);
-    ledStart = millis();
-    ledActive = true;
-  }
 }
 
 /*
@@ -276,16 +271,15 @@ void sendReadings() {
 void setup() {
   Serial.begin(115200);
   Serial.println("\nESP32 BME280: 5 Hz acquisition, 1 s mean/min/max, SDA=21 SCL=22");
+  setupPickup(); // Tests, persistent settings and exclusive LED ownership.
   // Leave OTA disabled until a sufficiently long password has been configured.
   if (strlen(OTA_PASSWORD) >= 12) {
     ArduinoOTA.setHostname(OTA_HOSTNAME);
     ArduinoOTA.setPassword(OTA_PASSWORD);
-    /* Turn off the measurement indicator while the OTA handler transfers firmware. */
+    /* Pause sensor acquisition; the pickup LED's timer remains independent. */
     ArduinoOTA.onStart([]() {
       pauseMotion(); // Stop the FIFO while OTA temporarily owns loop execution.
       Serial.println("[ota] Update starting; measurement and dashboard handling paused");
-      if (STATUS_LED_PIN >= 0) digitalWrite(STATUS_LED_PIN, !LED_ON);
-      ledActive = false;
     });
     /* Log coarse progress so serial output does not dominate update processing. */
     ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
@@ -318,10 +312,6 @@ void setup() {
     otaConfigured = true;
   } else {
     Serial.println("[ota] Disabled: set OTA_PASSWORD to at least 12 characters in config.h");
-  }
-  if (STATUS_LED_PIN >= 0) {
-    pinMode(STATUS_LED_PIN, OUTPUT);
-    digitalWrite(STATUS_LED_PIN, !LED_ON);
   }
   Wire.begin(SDA_PIN, SCL_PIN);
   Wire.setClock(100000); // Lower rates fit standard-mode I2C, with more wiring margin.
@@ -367,6 +357,10 @@ void setup() {
   server.on("/api/motion", HTTP_GET, sendMotionReadings);
   server.on("/api/motion/diagnostics", HTTP_GET, sendMotionDiagnostics);
   server.on("/api/motion/calibrate", HTTP_POST, startMotionCalibration);
+  server.on("/api/pickup/settings", HTTP_GET, sendPickupSettings);
+  server.on("/api/pickup/status", HTTP_GET, sendPickupStatus);
+  server.on("/api/pickup/settings", HTTP_POST, updatePickupSettings);
+  server.on("/api/pickup/defaults", HTTP_POST, restorePickupDefaults);
   /* Serve the original binary PNG with an explicit length, including any zero bytes. */
   server.on("/fox.png", HTTP_GET, []() {
     server.sendHeader("Cache-Control", "public, max-age=3600");
@@ -393,11 +387,7 @@ void loop() {
   server.handleClient();
   acquireMotion(); // Service data accumulated while a synchronous client was handled.
   const uint32_t now = millis();
-  // End the measurement pulse without delaying acquisition or client handling.
-  if (ledActive && now - ledStart >= LED_PULSE_MS) {
-    digitalWrite(STATUS_LED_PIN, !LED_ON);
-    ledActive = false;
-  }
+  servicePickup(now); // The only feature allowed to request LED changes.
   static bool wasConnected = false;
   const bool connected = WiFi.status() == WL_CONNECTED;
   // Bind OTA only after an IP is available, and reinitialize after a Wi-Fi loss.
