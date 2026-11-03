@@ -1,0 +1,78 @@
+﻿// Run with Node.js: node tests/dashboard.test.cjs
+const fs = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const source = fs.readFileSync(path.join(__dirname, '..', 'dashboard.h'), 'utf8');
+const script = source.match(/<script>([\s\S]*?)<\/script>/)[1];
+new vm.Script(script);
+const elements = new Map(), strokes = [], paths = [];
+let commands = [];
+const drawing = new Proxy({globalAlpha: 1}, {get(target,key) {
+  if(key==='beginPath')return ()=>{commands=[];};
+  if(key==='moveTo')return ()=>commands.push('M');
+  if(key==='lineTo')return ()=>commands.push('L');
+  if(key==='stroke')return ()=>{strokes.push(target.globalAlpha);paths.push({alpha:target.globalAlpha,commands:commands.join('')});};
+  return key in target?target[key]:()=>{};
+}});
+const document = {getElementById(id) {
+  if(!elements.has(id))elements.set(id,{textContent:'',value:'',disabled:true,addEventListener(event,fn){this[event]=fn;},clientWidth:320,width:0,height:0,getContext:()=>drawing});
+  return elements.get(id);
+}};
+let now=10000,fail=false,requested='';
+const point=(sequence,age_ms=10,ok=true)=>({sequence,age_ms,ok,sample_count:5,
+  temperature_c:ok?[23,22,24]:[null,null,null],humidity_pct:ok?[45,44,46]:[null,null,null],pressure_hpa:ok?[1000,999,1001]:[null,null,null]});
+let response={sequence:1,default_altitude_m:0,uptime_ms:5000,sample_age_ms:10,sample_count:5,
+  sensor_ok:true,wifi_connected:true,rssi_dbm:-50,temperature_c:23,humidity_pct:45,pressure_hpa:1000,error:'',history:[point(1)]};
+const context=vm.createContext({document,window:{devicePixelRatio:1,addEventListener(){}},
+  performance:{now:()=>now},AbortController,setTimeout(){return 1;},clearTimeout(){},setInterval(){},
+  fetch:async url=>{requested=url;if(fail)throw new Error('Offline');return {ok:true,json:async()=>({...response})};}
+});
+const read=expression=>vm.runInContext(expression,context);
+async function main(){
+  vm.runInContext(script,context);await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(elements.get('temperature').textContent,'23.00');
+  assert.equal(read('history.length'),1);
+  assert.equal(read('history[0].t[1]'),22);
+  assert.ok(strokes.includes(0.3),'extrema drawn at 30% opacity');
+  assert.ok(strokes.includes(1),'mean drawn at full opacity');
+  await read('poll()');assert.equal(read('history.length'),1,'deduplicated');
+  assert.match(requested,/since=1$/);
+  fail=true;await read('poll()');assert.match(elements.get('connection').textContent,/unreachable/);
+  assert.equal(read('history.length'),1,'network error does not create false sensor gaps');
+  fail=false;now+=16000; // Includes >1.25 s timing jitter relative to the first point.
+  response={...response,sequence:4,uptime_ms:20000,history:[point(2,10010),point(3,5010),point(4)]};
+  await read('poll()');
+  assert.equal(read('history.map(p=>p.sequence).join(",")'),'1,2,3,4','missed reports backfilled in order');
+  assert.ok(paths.some(p=>p.alpha===1&&p.commands==='MLLL'),'consecutive mean reports stay connected despite poll jitter');
+  assert.ok(paths.some(p=>p.alpha===0.3&&p.commands==='MLLL'),'extrema stay connected at 30% opacity');
+  response={...response,sequence:5,uptime_ms:25000,sensor_ok:false,error:'Incomplete window',temperature_c:null,history:[point(5,0,false)]};
+  await read('poll()');assert.match(elements.get('error').textContent,/Incomplete/);
+  assert.equal(read('history[4].t'),null,'invalid five-second window creates a real gap');
+  assert.equal(elements.get('temperature').textContent,'\u2014');
+  response={...response,sequence:1,uptime_ms:100,sensor_ok:true,error:'',temperature_c:24,history:[point(1)]};
+  await read('poll()');assert.equal(read('history.length'),1,'restart clears history');
+  assert.ok(Math.abs(read('dewPointC(20,50)')-9.27)<0.1,'known dew point');
+  assert.equal(read('dewPointC(20,100)'),20,'saturated air');
+  assert.equal(read('dewPointC(20,0)'),null,'zero RH unavailable');
+  assert.equal(read('seaLevelPressure(1000,0)'),1000,'zero altitude');
+  assert.ok(read('seaLevelPressure(1000,100)')>1000,'positive altitude raises sea-level pressure');
+  const original=read('history[0].p[0]');
+  elements.get('altitude').value='100';elements.get('altitude').input();
+  assert.ok(Number(elements.get('pressure').textContent)>1000);
+  assert.equal(read('history[0].p[0]'),original,'raw historical pressure is retained');
+  elements.get('altitude').value='';elements.get('altitude').input();
+  assert.equal(read('altitudeM'),100,'blank altitude rejected');
+  elements.get('altitude').value='10000';elements.get('altitude').input();
+  assert.equal(read('altitudeM'),100,'out of range altitude rejected');
+  read('history.length=0;history.push({at:1000},{at:11000})');
+  assert.equal(read('timeRange(11000).span'),10000,'short history fills width');
+  read('history[1].at=701000');assert.equal(read('timeRange(701000).span'),600000,'600 second cap');
+  read('history.length=0;history.push({at:performance.now(),sequence:1,t:[1,1,1],h:[1,1,1],p:[1000,1000,1000]})');
+  now+=61000;read('draw()');assert.equal(read('history.length'),1,'history retained beyond 60 s');
+  now+=540000;read('draw()');assert.equal(read('history.length'),0,'600-second expiry');
+  console.log('PASS: syntax, mean/min/max, 30% opacity, deduplication, backfill, errors, restart, history expiry');
+}
+main().catch(error=>{console.error(error);process.exitCode=1;});
+
+
