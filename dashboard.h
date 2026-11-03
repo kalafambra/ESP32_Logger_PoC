@@ -28,12 +28,14 @@ small{color:#cbaaaa}footer{margin:24px 0;color:#cbaaaa;font-size:.8rem;line-heig
 <article><h2>Temperature</h2><span class="value" id="temperature">—</span> <span class="unit">°C</span><canvas id="tempChart" role="img" aria-label="Temperature in degrees Celsius over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
 <article><h2>Relative humidity</h2><span class="value" id="humidity">—</span> <span class="unit">%</span><canvas id="humChart" role="img" aria-label="Relative humidity in percent over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
 <article><h2>Estimated sea-level pressure</h2><span class="value" id="pressure">—</span> <span class="unit">hPa</span><canvas id="pressureChart" role="img" aria-label="Sea-level pressure over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
+<article><h2>MPU6050 acceleration</h2><p id="motionValues">Waiting for motion sensor</p><p id="motionError" role="status"></p><small><span style="color:#ffb47f">X</span> · <span style="color:#e7b5ca">Y</span> · <span style="color:#e9d899">Z</span> · m/s², includes gravity · one-second readings</small><canvas id="motionChart" role="img" aria-label="MPU6050 X Y Z acceleration in meters per second squared"></canvas><small>Time relative to now (seconds)</small></article>
 </main>
 <footer>Up to 600 seconds of history; shorter histories fill the graph width. Gaps indicate unavailable reports. Altitude adjusts the pressure estimate in this tab; reload restores the configured altitude. No internet services required.</footer>
 <script>
 'use strict';
-const history=[];
-const charts=[['tempChart','t','#ffb47f','°C'],['humChart','h','#e7b5ca','%'],['pressureChart','p','#e9d899','hPa']];
+const history=[],motionHistory=[];
+let lastMotionSequence=null;
+const charts=[['tempChart','t','#ffb47f','°C'],['humChart','h','#e7b5ca','%'],['pressureChart','p','#e9d899','hPa'],['motionChart','a','#ffb47f','m/s²']];
 let lastSequence=null,lastUptime=null,lastSuccess=0;
 let altitudeM=0,altitudeInitialized=false,currentReading=null;
 const $=id=>document.getElementById(id);
@@ -61,10 +63,10 @@ function updateCurrent(){
 /* Convert pressure at render time to preserve raw history when altitude changes. */
 function channelValues(point,key){return key==='p'&&point.p?point.p.map(p=>seaLevelPressure(p,altitudeM)):point[key];}
 /* Fill the plot with available history instead of reserving empty space for ten minutes. */
-function timeRange(now){
+function timeRange(now,records=history){
  // Anchor to newest report so sparse five-second reports fill the full width.
- const end=history.length?history[history.length-1].at:now;
- const start=history.length>1?Math.max(end-600000,history[0].at):end-5000;
+ const end=records.length?records[records.length-1].at:now;
+ const start=records.length>1?Math.max(end-600000,records[0].at):end-5000;
  return {start,end,span:Math.max(1,end-start)};
 }
 /* Keep the previous valid correction while the user is typing an incomplete altitude. */
@@ -79,13 +81,15 @@ $('altitude').addEventListener('input',()=>{
 function draw(){
  const now=performance.now();
  while(history.length && history[0].at<now-600000)history.shift();
- const {start,end,span}=timeRange(now); // Keep all channels aligned on the same time axis.
+ while(motionHistory.length && motionHistory[0].at<now-600000)motionHistory.shift();
  for(const [id,key,color,unit] of charts){
+  const records=key==='a'?motionHistory:history;
+  const {start,end,span}=timeRange(now,records);
   const canvas=$(id),ratio=window.devicePixelRatio||1,w=canvas.clientWidth,h=240;
   if(canvas.width!==Math.round(w*ratio)||canvas.height!==Math.round(h*ratio)){canvas.width=Math.round(w*ratio);canvas.height=Math.round(h*ratio);}
   const ctx=canvas.getContext('2d');ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,w,h);
   const left=64,right=w-12,top=25,bottom=h-30;
-  const points=history.filter(p=>p[key]&&p[key].every(Number.isFinite));
+  const points=records.filter(p=>p[key]&&p[key].every(Number.isFinite));
   const values=points.flatMap(p=>channelValues(p,key)); // Include extrema in vertical scaling.
   let lo=values.length?Math.min(...values):0,hi=values.length?Math.max(...values):1;
   const margin=Math.max((hi-lo)*.15,key==='p'?.5:.2);lo-=margin;hi+=margin;
@@ -102,9 +106,10 @@ function draw(){
   ctx.textAlign='left';ctx.strokeStyle=color;
   // Render min and max first, each at exactly 30% opacity, then the mean.
   for(const index of [1,2,0]){
-   ctx.globalAlpha=index===0?1:0.3;ctx.lineWidth=index===0?2:1.5;
+   ctx.globalAlpha=key==='a'?1:index===0?1:0.3;ctx.lineWidth=index===0||key==='a'?2:1.5;
+   ctx.strokeStyle=key==='a'?['#ffb47f','#e7b5ca','#e9d899'][index]:color;
    ctx.beginPath();let previous=null;
-   for(const point of history){
+   for(const point of records){
     if(!point[key]||!Number.isFinite(point[key][index])){previous=null;continue;}
     const x=left+(point.at-start)/span*(right-left),y=bottom-(channelValues(point,key)[index]-lo)/(hi-lo)*(bottom-top);
     // Sequence continuity, not browser-poll timing, determines real gaps.
@@ -133,7 +138,7 @@ async function poll(){
    altitudeM=value;altitudeInitialized=true;$('altitude').value=String(value);$('altitude').disabled=false;
   }
   // A reboot invalidates sequence continuity and the previous device-uptime timeline.
-  if(lastUptime!==null && (data.uptime_ms<lastUptime||data.sequence<lastSequence)){history.length=0;lastSequence=null;}
+  if(lastUptime!==null && (data.uptime_ms<lastUptime||data.sequence<lastSequence)){history.length=0;motionHistory.length=0;lastMotionSequence=null;lastSequence=null;}
   lastUptime=data.uptime_ms;
   if(!Array.isArray(data.history))throw new Error('Missing aggregate history; refresh after firmware update');
   for(const point of data.history){
@@ -144,6 +149,17 @@ async function poll(){
    history.push({sequence:point.sequence,at:now-Math.min(point.age_ms,600000),
                  t:ok?point.temperature_c:null,h:ok?point.humidity_pct:null,p:ok?point.pressure_hpa:null});
    lastSequence=point.sequence;
+  }
+  // Motion has its own status and cadence, so BME failures do not hide acceleration.
+  const motion=data.motion;
+  if(motion){
+   const ok=motion.ok&&Array.isArray(motion.acceleration_m_s2)&&motion.acceleration_m_s2.length===3&&motion.acceleration_m_s2.every(Number.isFinite);
+   $('motionError').textContent=ok?'':(motion.error||'MPU6050 unavailable');
+   $('motionValues').textContent=ok?motion.acceleration_m_s2.map((v,i)=>['X','Y','Z'][i]+': '+v.toFixed(3)).join(' · ')+' m/s²':'—';
+   if(motion.sequence && motion.sequence!==lastMotionSequence){
+    motionHistory.push({sequence:motion.sequence,at:now-Math.min(motion.sample_age_ms,600000),a:ok?motion.acceleration_m_s2:null});
+    lastMotionSequence=motion.sequence;
+   }
   }
   const valid=data.sensor_ok&&[data.temperature_c,data.humidity_pct,data.pressure_hpa].every(Number.isFinite);
   $('connection').textContent=data.wifi_connected?'Connected to ESP32':'ESP32 Wi-Fi disconnected';
@@ -167,6 +183,7 @@ setInterval(draw,1000);poll();
 </script>
 </html>
 )DASHBOARD";
+
 
 
 

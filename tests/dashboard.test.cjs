@@ -23,7 +23,8 @@ let now=10000,fail=false,requested='';
 const point=(sequence,age_ms=10,ok=true)=>({sequence,age_ms,ok,sample_count:5,
   temperature_c:ok?[23,22,24]:[null,null,null],humidity_pct:ok?[45,44,46]:[null,null,null],pressure_hpa:ok?[1000,999,1001]:[null,null,null]});
 let response={sequence:1,default_altitude_m:0,uptime_ms:5000,sample_age_ms:10,sample_count:5,
-  sensor_ok:true,wifi_connected:true,rssi_dbm:-50,temperature_c:23,humidity_pct:45,pressure_hpa:1000,error:'',history:[point(1)]};
+  sensor_ok:true,wifi_connected:true,rssi_dbm:-50,temperature_c:23,humidity_pct:45,pressure_hpa:1000,error:'',history:[point(1)],
+  motion:{sequence:1,sample_age_ms:20,ok:true,error:'',acceleration_m_s2:[0.1,-0.2,9.81]}};
 const context=vm.createContext({document,window:{devicePixelRatio:1,addEventListener(){}},
   performance:{now:()=>now},AbortController,setTimeout(){return 1;},clearTimeout(){},setInterval(){},
   fetch:async url=>{requested=url;if(fail)throw new Error('Offline');return {ok:true,json:async()=>({...response})};}
@@ -33,10 +34,14 @@ async function main(){
   vm.runInContext(script,context);await new Promise(resolve=>setImmediate(resolve));
   assert.equal(elements.get('temperature').textContent,'23.00');
   assert.equal(read('history.length'),1);
+  assert.equal(read('motionHistory.length'),1);
+  assert.match(elements.get('motionValues').textContent,/Z: 9.810/);
+  assert.equal(read('motionHistory[0].a[1]'),-0.2,'signed acceleration preserved');
   assert.equal(read('history[0].t[1]'),22);
   assert.ok(strokes.includes(0.3),'extrema drawn at 30% opacity');
   assert.ok(strokes.includes(1),'mean drawn at full opacity');
   await read('poll()');assert.equal(read('history.length'),1,'deduplicated');
+  assert.equal(read('motionHistory.length'),1,'motion sequence deduplicated');
   assert.match(requested,/since=1$/);
   fail=true;await read('poll()');assert.match(elements.get('connection').textContent,/unreachable/);
   assert.equal(read('history.length'),1,'network error does not create false sensor gaps');
@@ -49,6 +54,11 @@ async function main(){
   response={...response,sequence:5,uptime_ms:25000,sensor_ok:false,error:'Incomplete window',temperature_c:null,history:[point(5,0,false)]};
   await read('poll()');assert.match(elements.get('error').textContent,/Incomplete/);
   assert.equal(read('history[4].t'),null,'invalid five-second window creates a real gap');
+  assert.match(elements.get('motionValues').textContent,/9.810/,'BME error does not hide valid motion');
+  response.motion={sequence:2,sample_age_ms:0,ok:false,error:'MPU6050 I2C read failed',acceleration_m_s2:[null,null,null]};
+  await read('poll()');
+  assert.match(elements.get('motionError').textContent,/I2C read failed/);
+  assert.equal(read('motionHistory[1].a'),null,'failed MPU sample creates graph gap');
   assert.equal(elements.get('temperature').textContent,'\u2014');
   response={...response,sequence:1,uptime_ms:100,sensor_ok:true,error:'',temperature_c:24,history:[point(1)]};
   await read('poll()');assert.equal(read('history.length'),1,'restart clears history');

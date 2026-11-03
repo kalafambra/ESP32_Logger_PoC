@@ -284,3 +284,56 @@ fox.png. Authenticated OTA upload to 192.168.50.83 completed successfully with
 an OK result. After reboot, HTTP GET / returned 200 with the new fox header
 and palette; GET /fox.png returned 200, image/png, 48676 bytes. Visual rendering
 and physical sensor/LED behavior for this update still require user confirmation.
+
+## MPU6050 fourth graph
+
+Power off before wiring. The MPU6050 shares the BME280 bus:
+
+| Keyes MPU6050 | ESP32 |
+| --- | --- |
+| SDA | GPIO21 / D21 (same as BME280 SDA) |
+| SCL | GPIO22 / D22 (same as BME280 SCL) |
+| GND | GND |
+| VCC | 3V3, provided your particular breakout supports 3.3 V supply |
+| AD0 | GND, selecting I2C address 0x68 |
+| INT, XDA, XCL | Unconnected for this polling implementation |
+
+Do not leave AD0 floating. If tied to 3V3 instead, the address becomes 0x69;
+change MPU_ADDRESS in motion.h accordingly. MPU identity WHO_AM_I remains 0x68.
+Use 3.3 V logic/pull-ups on the shared ESP32 bus, even if a breakout regulator
+supports a higher supply. Check your exact Keyes board's schematic for its
+regulator and pull-ups. BME280 uses 0x76/0x77 so it does not conflict with 0x68.
+No additional GPIO or interrupt connection is necessary.
+
+motion.h implements checked register reads/writes using the existing Wire bus;
+no additional MPU library is required. It configures +/-2 g acceleration,
+5 Hz hardware low-pass filtering and 10 Hz internal sampling, then snapshots
+X/Y/Z at 1 Hz. Scaling is 16384 counts/g and 9.80665 m/s^2 per g. Burst reads
+keep all three axes together. Application sampling does not use delay().
+The fourth graph displays raw X/Y/Z acceleration, not averaged, in m/s^2,
+including gravity. It retains up to 600 seconds in the browser tab. At rest,
+the vector magnitude should be near 9.81 m/s^2; direction depends on mounting.
+This is an initial slow-motion display, not an orientation solution or impact
+recorder. Gyroscope data is not plotted in this first stage.
+
+/api/readings now includes motion with sequence, sample_age_ms, ok, error and
+acceleration_m_s2: [X,Y,Z]. Errors emit nulls. Each acquisition attempt advances
+the motion sequence so failures are visible as gaps. MPU data is independent
+of the BME280 averaging window. Motion values are polled once per second;
+missed browser polls create gaps, with no device-side motion backfill. Only
+BME history is backfilled. Disconnecting the MPU at runtime reports I2C errors;
+initialization failure requires fixing wiring and resetting the board.
+
+Manual verification: check startup detection at 0x68, one MPU serial message
+per second, fourth-graph X/Y/Z units/legend, response to slow rotations, gravity
+magnitude at rest, and continued BME readings. Test missing MPU error reporting
+and shared-bus behavior. Firmware has not yet been uploaded for this addition.
+
+References:
+- https://product.tdk.com/system/files/dam/doc/product/sensor/mortion-inertial/imu/data_sheet/mpu-6000-datasheet1.pdf
+- https://learn.adafruit.com/mpu6050-6-dof-accelerometer-and-gyro?view=all
+
+MPU6050 addition validation: compilation passed for ESP32 Dev Module,
+flash 1097779 bytes (83%); static RAM 60512 bytes (18%). Dashboard tests passed,
+including X/Y/Z display, signed acceleration, duplicate suppression and motion
+errors independent of BME errors. No upload or actual MPU6050 test performed.

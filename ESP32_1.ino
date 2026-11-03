@@ -9,6 +9,7 @@
 #include "dashboard.h"
 #include "fox_image.h"
 #include "aggregation.h"
+#include "motion.h"
 
 Adafruit_BME280 bme;
 WebServer server(80);
@@ -242,6 +243,7 @@ void sendReadings() {
   json += ",\"temperature_c\":" + (fresh ? String(latest.temperature.mean, 3) : String("null"));
   json += ",\"humidity_pct\":" + (fresh ? String(latest.humidity.mean, 3) : String("null"));
   json += ",\"pressure_hpa\":" + (fresh ? String(latest.pressure.mean, 3) : String("null"));
+  appendMotion(json, now);
   json += ",\"history\":[";
   bool first = true;
   // Traverse oldest to newest so the browser can append reports in sequence.
@@ -341,6 +343,7 @@ void setup() {
     sensorError = "BME280 not found at 0x76 or 0x77; check wiring and reset";
     Serial.printf("[sensor] %s\n", sensorError);
   }
+  setupMotion(); // Both sensors share GPIO21/GPIO22, with different I2C addresses.
   windowStart = millis();
   lastStart = windowStart - SAMPLE_INTERVAL_MS;
   WiFi.onEvent(wifiEvent);
@@ -378,6 +381,7 @@ void loop() {
   // Close the old window before a new conversion can enter the next window.
   publishWindow(millis());
   acquireSensor();
+  acquireMotion(); // Independent one-second snapshots, not five-second averages.
   server.handleClient();
   const uint32_t now = millis();
   // End the measurement pulse without delaying acquisition or client handling.
