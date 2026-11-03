@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 struct ChannelStats {
   float sum = 0;
@@ -40,7 +40,8 @@ struct PublishedSample {
   unsigned long sequence = 0, sampleMs = 0;
   unsigned count = 0;
   bool ok = false;
-  const char *error = "Waiting for first five-second window";
+  const char *error = "Waiting for first one-second window";
   PublishedChannel temperature, humidity, pressure;
 };
+
 

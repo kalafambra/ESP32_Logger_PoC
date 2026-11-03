@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // Use a 2.4 GHz Wi-Fi network. Credentials stay on the device, not in the API.
 constexpr char WIFI_SSID[] = "YOUR_WIFI_SSID";
@@ -8,8 +8,8 @@ constexpr uint8_t SCL_PIN = 22;
 // Carrier boards vary: use -1 to disable a missing user LED.
 constexpr int STATUS_LED_PIN = 2;
 constexpr uint8_t LED_ON = HIGH;
-constexpr uint32_t SAMPLE_INTERVAL_MS = 1000;
-constexpr uint32_t LED_PULSE_MS = 250;
+constexpr uint32_t SAMPLE_INTERVAL_MS = 200;
+constexpr uint32_t LED_PULSE_MS = 100;
 
 
 
@@ -22,3 +22,9 @@ constexpr char OTA_HOSTNAME[] = "esp32-bme280";
 // Set a unique password (at least 12 characters). Empty disables OTA.
 // Do not share this value in chat. This is separate from your Wi-Fi password.
 constexpr char OTA_PASSWORD[] = "";
+
+// MPU6050 INT: active-high data-ready interrupt, separate from the shared I2C bus.
+constexpr uint8_t MPU_INTERRUPT_PIN = 17;
+
+
+

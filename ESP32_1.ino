@@ -1,4 +1,4 @@
-#include <Arduino.h>
+﻿#include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -21,14 +21,14 @@ bool wifiRestartPending = false;
 bool otaConfigured = false, otaStarted = false;
 constexpr uint32_t WIFI_ATTEMPT_MS = 30000;
 constexpr uint32_t WIFI_RESTART_PAUSE_MS = 250;
-constexpr uint32_t PUBLISH_INTERVAL_MS = 5000;
+constexpr uint32_t PUBLISH_INTERVAL_MS = 1000;
 constexpr unsigned SAMPLES_PER_WINDOW = 5;
-static_assert(SAMPLE_INTERVAL_MS == 1000, "1 Hz requires SAMPLE_INTERVAL_MS = 1000");
+static_assert(SAMPLE_INTERVAL_MS == 200, "5 Hz requires SAMPLE_INTERVAL_MS = 200");
 static_assert(DEFAULT_ALTITUDE_M >= -500 && DEFAULT_ALTITUDE_M <= 9000,
               "Set DEFAULT_ALTITUDE_M between -500 and 9000 meters");
 SampleWindow window;
 PublishedSample latest;
-constexpr unsigned HISTORY_SIZE = 122;
+constexpr unsigned HISTORY_SIZE = 602;
 PublishedSample publishedHistory[HISTORY_SIZE];
 unsigned historyHead = 0, historyCount = 0;
 bool windowFailed = false;
@@ -85,11 +85,11 @@ void failSample(const char *message) {
   sensorError = message;
   windowFailed = true;
   converting = false;
-  // Publish the error with the five-second report, not at raw acquisition rate.
+  // Publish the error with the one-second report, not at raw acquisition rate.
 }
 
 /*
- * Advance a forced-conversion state machine at one reading per second.
+ * Advance a forced-conversion state machine at five readings per second.
  * Returning between trigger and read keeps the dashboard and OTA responsive.
  * Only validated measurements enter the average or generate an LED pulse.
  */
@@ -159,7 +159,7 @@ void acquireSensor() {
 }
 
 /*
- * Close each five-second window and publish mean/min/max for exactly five
+ * Close each one-second window and publish mean/min/max for exactly five
  * valid readings. Keep a bounded history so missed browser polls can recover.
  * Include network status even in error reports to support remote diagnosis.
  */
@@ -171,7 +171,7 @@ void publishWindow(uint32_t now) {
   latest.count = window.count;
   // Reject missing readings, any recorded error, and excessively delayed windows.
   latest.ok = sensorReady && !windowFailed && window.count == SAMPLES_PER_WINDOW && now - windowStart < PUBLISH_INTERVAL_MS + SAMPLE_INTERVAL_MS;
-  latest.error = latest.ok ? "" : !sensorReady ? sensorError : windowFailed ? sensorError : "Incomplete five-second window (expected 5 readings)";
+  latest.error = latest.ok ? "" : !sensorReady ? sensorError : windowFailed ? sensorError : "Incomplete one-second window (expected 5 readings)";
   // Calculate channel statistics separately; their extrema need not coincide.
   latest.temperature.finish(window.temperature, window.count);
   latest.humidity.finish(window.humidity, window.count);
@@ -222,19 +222,19 @@ void sendReadings() {
   const uint32_t age = now - latest.sampleMs;
   // Allow a full reporting interval plus scheduling margin before marking stale.
   const bool fresh = latest.sequence && latest.ok && age <= PUBLISH_INTERVAL_MS + 1500;
-  const char *error = latest.ok && !fresh ? "Five-second report stale" : latest.error;
+  const char *error = latest.ok && !fresh ? "One-second report stale" : latest.error;
   // Browser requests records newer than its last sequence. This repairs missed
   // HTTP polls instead of drawing breaks for measurements still held in RAM.
   uint32_t since = server.hasArg("since") ? strtoul(server.arg("since").c_str(), nullptr, 10) : 0;
   if (since > latest.sequence) since = 0; // Device restarted.
   String json;
-  json.reserve(34000); // Reduce heap reallocations when backfilling ten minutes.
+  json.reserve(16000); // Reduce heap reallocations when backfilling ten minutes.
   json = "{\"sequence\":" + String(latest.sequence);
   json += ",\"uptime_ms\":" + String(now);
   json += ",\"default_altitude_m\":" + String(DEFAULT_ALTITUDE_M, 2);
   json += ",\"sample_ms\":" + String(latest.sampleMs);
   json += ",\"sample_age_ms\":" + (latest.sequence ? String(age) : String("null"));
-  json += ",\"sample_interval_ms\":1000,\"publish_interval_ms\":5000,\"sample_count\":" + String(latest.count);
+  json += ",\"sample_interval_ms\":200,\"publish_interval_ms\":1000,\"sample_count\":" + String(latest.count);
   json += ",\"sensor_ok\":"; json += fresh ? "true" : "false";
   json += ",\"error\":\""; json += error; json += "\"";
   json += ",\"wifi_connected\":";
@@ -246,12 +246,14 @@ void sendReadings() {
   appendMotion(json, now);
   json += ",\"history\":[";
   bool first = true;
+  unsigned sent = 0; // Bound history backfill so a long response does not starve FIFO servicing.
   // Traverse oldest to newest so the browser can append reports in sequence.
-  for (unsigned i = 0; i < historyCount; ++i) {
+  for (unsigned i = 0; i < historyCount && sent < 60; ++i) {
     const PublishedSample &point = publishedHistory[(historyHead + HISTORY_SIZE - historyCount + i) % HISTORY_SIZE];
     if (point.sequence <= since || now - point.sampleMs > 600000) continue; // Limit to requested, recent reports.
     if (!first) json += ',';
     first = false;
+    ++sent;
     json += "{\"sequence\":" + String(point.sequence) + ",\"age_ms\":" + String(now - point.sampleMs);
     json += ",\"sample_count\":" + String(point.count) + ",\"ok\":";
     json += point.ok ? "true" : "false";
@@ -273,13 +275,14 @@ void sendReadings() {
  */
 void setup() {
   Serial.begin(115200);
-  Serial.println("\nESP32 BME280: 1 Hz acquisition, 5 s mean/min/max, SDA=21 SCL=22");
+  Serial.println("\nESP32 BME280: 5 Hz acquisition, 1 s mean/min/max, SDA=21 SCL=22");
   // Leave OTA disabled until a sufficiently long password has been configured.
   if (strlen(OTA_PASSWORD) >= 12) {
     ArduinoOTA.setHostname(OTA_HOSTNAME);
     ArduinoOTA.setPassword(OTA_PASSWORD);
     /* Turn off the measurement indicator while the OTA handler transfers firmware. */
     ArduinoOTA.onStart([]() {
+      pauseMotion(); // Stop the FIFO while OTA temporarily owns loop execution.
       Serial.println("[ota] Update starting; measurement and dashboard handling paused");
       if (STATUS_LED_PIN >= 0) digitalWrite(STATUS_LED_PIN, !LED_ON);
       ledActive = false;
@@ -299,6 +302,7 @@ void setup() {
     });
     /* Diagnose upload failures and discard samples spanning an interrupted update. */
     ArduinoOTA.onError([](ota_error_t error) {
+      resumeMotion(); // Reset FIFO framing before collecting post-update samples.
       const char *reason = error == OTA_AUTH_ERROR ? "authentication failed" :
                            error == OTA_BEGIN_ERROR ? "cannot begin update (partition/space)" :
                            error == OTA_CONNECT_ERROR ? "connection failed" :
@@ -320,7 +324,7 @@ void setup() {
     digitalWrite(STATUS_LED_PIN, !LED_ON);
   }
   Wire.begin(SDA_PIN, SCL_PIN);
-  Wire.setClock(100000);
+  Wire.setClock(100000); // Lower rates fit standard-mode I2C, with more wiring margin.
   Wire.setTimeOut(20);  // Bound I2C failures; I/O itself is synchronous.
   // Breakouts use either address depending on their SDO wiring.
   for (uint8_t address : {uint8_t(0x76), uint8_t(0x77)}) {
@@ -344,6 +348,7 @@ void setup() {
     Serial.printf("[sensor] %s\n", sensorError);
   }
   setupMotion(); // Both sensors share GPIO21/GPIO22, with different I2C addresses.
+  Wire.setClock(100000); // Reassert standard-mode speed after sensor initialization helpers.
   windowStart = millis();
   lastStart = windowStart - SAMPLE_INTERVAL_MS;
   WiFi.onEvent(wifiEvent);
@@ -359,6 +364,7 @@ void setup() {
     server.send_P(200, "text/html; charset=utf-8", DASHBOARD_HTML);
   });
   server.on("/api/readings", HTTP_GET, sendReadings);
+  server.on("/api/motion", HTTP_GET, sendMotionReadings);
   /* Serve the original binary PNG with an explicit length, including any zero bytes. */
   server.on("/fox.png", HTTP_GET, []() {
     server.sendHeader("Cache-Control", "public, max-age=3600");
@@ -381,8 +387,9 @@ void loop() {
   // Close the old window before a new conversion can enter the next window.
   publishWindow(millis());
   acquireSensor();
-  acquireMotion(); // Independent one-second snapshots, not five-second averages.
+  acquireMotion(); // Drain FIFO and publish independent one-second motion reports.
   server.handleClient();
+  acquireMotion(); // Service data accumulated while a synchronous client was handled.
   const uint32_t now = millis();
   // End the measurement pulse without delaying acquisition or client handling.
   if (ledActive && now - ledStart >= LED_PULSE_MS) {
@@ -425,6 +432,7 @@ void loop() {
     if (!WiFi.reconnect()) Serial.println("[wifi] Could not start connection; will retry in 30 s");
   }
 }
+
 
 
 

@@ -20,15 +20,15 @@ article{background:linear-gradient(135deg,#34242e,#2b1e27);border:1px solid #694
 small{color:#cbaaaa}footer{margin:24px 0;color:#cbaaaa;font-size:.8rem;line-height:1.6}
 @media(max-width:540px){body{padding:20px 14px}.brand{gap:16px}.fox-mark{width:82px;height:82px;border-radius:18px}.brand p{font-size:.8rem}article{padding:18px}}
 </style>
-<header class="brand"><img class="fox-mark" src="/fox.png" alt="Pixel-art fox mascot" width="116" height="116"><div><div class="eyebrow">Fox den · Live environment</div><h1>Environmental monitor</h1><p>ESP32 + BME280 · 1 reading/s · five-second reports</p></div></header>
+<header class="brand"><img class="fox-mark" src="/fox.png" alt="Pixel-art fox mascot" width="116" height="116"><div><div class="eyebrow">Fox den · Live environment</div><h1>Environmental monitor</h1><p>ESP32 + BME280 · BME280 5 readings/s · one-second reports</p></div></header>
 <div class="status" role="status" aria-live="polite"><div id="connection">Connecting to ESP32…</div><div id="detail">Waiting for sensor data</div><div id="error"></div></div>
 <div class="settings"><label for="altitude">Altitude above sea level (m)</label><input id="altitude" type="number" min="-500" max="9000" step="0.1" disabled aria-describedby="altitudeError"><span id="altitudeError" role="status"></span></div>
-<p>Dew point: <strong id="dewPoint">—</strong> °C <small>(calculated from five-second mean temperature and humidity)</small></p>
+<p>Dew point: <strong id="dewPoint">—</strong> °C <small>(calculated from one-second mean temperature and humidity)</small></p>
 <p>Solid line: mean of 5 readings. Faint lines (30% opacity): minimum and maximum.</p><main class="cards">
 <article><h2>Temperature</h2><span class="value" id="temperature">—</span> <span class="unit">°C</span><canvas id="tempChart" role="img" aria-label="Temperature in degrees Celsius over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
 <article><h2>Relative humidity</h2><span class="value" id="humidity">—</span> <span class="unit">%</span><canvas id="humChart" role="img" aria-label="Relative humidity in percent over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
 <article><h2>Estimated sea-level pressure</h2><span class="value" id="pressure">—</span> <span class="unit">hPa</span><canvas id="pressureChart" role="img" aria-label="Sea-level pressure over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
-<article><h2>MPU6050 acceleration</h2><p id="motionValues">Waiting for motion sensor</p><p id="motionError" role="status"></p><small><span style="color:#ffb47f">X</span> · <span style="color:#e7b5ca">Y</span> · <span style="color:#e9d899">Z</span> · m/s², includes gravity · one-second readings</small><canvas id="motionChart" role="img" aria-label="MPU6050 X Y Z acceleration in meters per second squared"></canvas><small>Time relative to now (seconds)</small></article>
+<article><h2>MPU6050 acceleration</h2><p id="motionValues">Waiting for motion sensor</p><p id="motionError" role="status"></p><small><span style="color:#ffb47f">X</span> · <span style="color:#e7b5ca">Y</span> · <span style="color:#e9d899">Z</span> · m/s², includes gravity · one-second means · 100 Hz acquisition target</small><canvas id="motionChart" role="img" aria-label="MPU6050 X Y Z acceleration in meters per second squared"></canvas><small>Time relative to now (seconds)</small></article>
 </main>
 <footer>Up to 600 seconds of history; shorter histories fill the graph width. Gaps indicate unavailable reports. Altitude adjusts the pressure estimate in this tab; reload restores the configured altitude. No internet services required.</footer>
 <script>
@@ -64,7 +64,7 @@ function updateCurrent(){
 function channelValues(point,key){return key==='p'&&point.p?point.p.map(p=>seaLevelPressure(p,altitudeM)):point[key];}
 /* Fill the plot with available history instead of reserving empty space for ten minutes. */
 function timeRange(now,records=history){
- // Anchor to newest report so sparse five-second reports fill the full width.
+ // Anchor to newest report so sparse one-second reports fill the full width.
  const end=records.length?records[records.length-1].at:now;
  const start=records.length>1?Math.max(end-600000,records[0].at):end-5000;
  return {start,end,span:Math.max(1,end-start)};
@@ -78,11 +78,12 @@ $('altitude').addEventListener('input',()=>{
  altitudeM=value;$('altitudeError').textContent='';updateCurrent();draw();
 });
 /* Redraw three independent plots with shared time bounds and faint min/max envelopes. */
-function draw(){
+function draw(onlyMotion=false){
  const now=performance.now();
  while(history.length && history[0].at<now-600000)history.shift();
  while(motionHistory.length && motionHistory[0].at<now-600000)motionHistory.shift();
  for(const [id,key,color,unit] of charts){
+  if(onlyMotion===true&&key!=='a')continue;
   const records=key==='a'?motionHistory:history;
   const {start,end,span}=timeRange(now,records);
   const canvas=$(id),ratio=window.devicePixelRatio||1,w=canvas.clientWidth,h=240;
@@ -138,7 +139,7 @@ async function poll(){
    altitudeM=value;altitudeInitialized=true;$('altitude').value=String(value);$('altitude').disabled=false;
   }
   // A reboot invalidates sequence continuity and the previous device-uptime timeline.
-  if(lastUptime!==null && (data.uptime_ms<lastUptime||data.sequence<lastSequence)){history.length=0;motionHistory.length=0;lastMotionSequence=null;lastSequence=null;}
+  if(lastUptime!==null && (data.uptime_ms<lastUptime||data.sequence<lastSequence)){history.length=0;lastSequence=null;}
   lastUptime=data.uptime_ms;
   if(!Array.isArray(data.history))throw new Error('Missing aggregate history; refresh after firmware update');
   for(const point of data.history){
@@ -150,20 +151,9 @@ async function poll(){
                  t:ok?point.temperature_c:null,h:ok?point.humidity_pct:null,p:ok?point.pressure_hpa:null});
    lastSequence=point.sequence;
   }
-  // Motion has its own status and cadence, so BME failures do not hide acceleration.
-  const motion=data.motion;
-  if(motion){
-   const ok=motion.ok&&Array.isArray(motion.acceleration_m_s2)&&motion.acceleration_m_s2.length===3&&motion.acceleration_m_s2.every(Number.isFinite);
-   $('motionError').textContent=ok?'':(motion.error||'MPU6050 unavailable');
-   $('motionValues').textContent=ok?motion.acceleration_m_s2.map((v,i)=>['X','Y','Z'][i]+': '+v.toFixed(3)).join(' · ')+' m/s²':'—';
-   if(motion.sequence && motion.sequence!==lastMotionSequence){
-    motionHistory.push({sequence:motion.sequence,at:now-Math.min(motion.sample_age_ms,600000),a:ok?motion.acceleration_m_s2:null});
-    lastMotionSequence=motion.sequence;
-   }
-  }
   const valid=data.sensor_ok&&[data.temperature_c,data.humidity_pct,data.pressure_hpa].every(Number.isFinite);
   $('connection').textContent=data.wifi_connected?'Connected to ESP32':'ESP32 Wi-Fi disconnected';
-  $('error').textContent=valid?'':('Sensor: '+(data.error||'Waiting for a complete five-second window'));
+  $('error').textContent=valid?'':('Sensor: '+(data.error||'Waiting for a complete one-second window'));
   $('detail').textContent='Report #'+data.sequence+' · '+data.sample_count+'/5 readings · '+(data.sample_age_ms===null?'No report yet':data.sample_age_ms+' ms old')+' · Wi-Fi '+data.rssi_dbm+' dBm';
   if(valid){
    currentReading=data;updateCurrent();
@@ -178,11 +168,47 @@ async function poll(){
   clearTimeout(timeout);draw();setTimeout(poll,Math.max(0,1000-(performance.now()-started)));
  }
 }
+let lastMotionUptime=null;
+/* Process only completed one-second aggregates; keep raw acquisition off the network. */
+function consumeMotion(data,now){
+ const motion=data.motion;
+ if(!motion)throw new Error('Missing motion status');
+ if(lastMotionUptime!==null&&(data.uptime_ms<lastMotionUptime||motion.sequence<lastMotionSequence)){
+  motionHistory.length=0;lastMotionSequence=null;
+ }
+ lastMotionUptime=data.uptime_ms;
+ const ok=motion.ok&&Array.isArray(motion.acceleration_m_s2)&&motion.acceleration_m_s2.length===3&&motion.acceleration_m_s2.every(Number.isFinite);
+ $('motionError').textContent=ok?(motion.warning||''):(motion.error||'MPU6050 unavailable');
+ $('motionValues').textContent=ok?motion.acceleration_m_s2.map((v,i)=>['X','Y','Z'][i]+': '+v.toFixed(3)).join(' · ')+' m/s² · n='+(motion.sample_count??'?')+' · FIFO overflows: '+(motion.fifo_overflows??0):'—';
+ for(const point of data.history||[]){
+  if(point.sequence<=lastMotionSequence)continue;
+  const valid=point.ok&&Array.isArray(point.a)&&point.a.length===3&&point.a.every(Number.isFinite);
+  motionHistory.push({sequence:point.sequence,at:now-Math.min(point.age_ms,600000),a:valid?point.a:null});
+  lastMotionSequence=point.sequence;
+ }
+}
+/* Use an independent 1 Hz request stream, with bounded backfill and no overlapping fetches. */
+async function pollMotion(){
+ const started=performance.now(),controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),2000);
+ try{
+  const response=await fetch('/api/motion?since='+(lastMotionSequence??0),{cache:'no-store',signal:controller.signal});
+  if(!response.ok)throw new Error('HTTP '+response.status);
+  consumeMotion(await response.json(),performance.now());
+ }catch(error){
+  $('motionValues').textContent='—';$('motionError').textContent='Motion request failed: '+error.message;
+ }finally{
+  clearTimeout(timeout);
+  // Coalesce redraws to the publication rate; do not repaint environmental plots here.
+  draw(true);setTimeout(pollMotion,Math.max(0,1000-(performance.now()-started)));
+ }
+}
 window.addEventListener('resize',draw);
-setInterval(draw,1000);poll();
+setInterval(draw,1000);poll();pollMotion();
 </script>
 </html>
 )DASHBOARD";
+
+
 
 
 

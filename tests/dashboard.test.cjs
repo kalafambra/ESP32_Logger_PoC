@@ -20,14 +20,20 @@ const document = {getElementById(id) {
   return elements.get(id);
 }};
 let now=10000,fail=false,requested='';
+const scheduled=[];
 const point=(sequence,age_ms=10,ok=true)=>({sequence,age_ms,ok,sample_count:5,
   temperature_c:ok?[23,22,24]:[null,null,null],humidity_pct:ok?[45,44,46]:[null,null,null],pressure_hpa:ok?[1000,999,1001]:[null,null,null]});
 let response={sequence:1,default_altitude_m:0,uptime_ms:5000,sample_age_ms:10,sample_count:5,
   sensor_ok:true,wifi_connected:true,rssi_dbm:-50,temperature_c:23,humidity_pct:45,pressure_hpa:1000,error:'',history:[point(1)],
   motion:{sequence:1,sample_age_ms:20,ok:true,error:'',acceleration_m_s2:[0.1,-0.2,9.81]}};
 const context=vm.createContext({document,window:{devicePixelRatio:1,addEventListener(){}},
-  performance:{now:()=>now},AbortController,setTimeout(){return 1;},clearTimeout(){},setInterval(){},
-  fetch:async url=>{requested=url;if(fail)throw new Error('Offline');return {ok:true,json:async()=>({...response})};}
+  performance:{now:()=>now},AbortController,setTimeout(fn,ms){scheduled.push(ms);return 1;},clearTimeout(){},setInterval(){},
+    fetch:async url=>{
+    if(fail)throw new Error('Offline');
+    if(url.startsWith('/api/motion'))return {ok:true,json:async()=>({uptime_ms:response.uptime_ms,motion:response.motion,
+      history:[{sequence:response.motion.sequence,age_ms:response.motion.sample_age_ms,ok:response.motion.ok,a:response.motion.acceleration_m_s2}]})};
+    requested=url;return {ok:true,json:async()=>({...response})};
+  }
 });
 const read=expression=>vm.runInContext(expression,context);
 async function main(){
@@ -37,6 +43,9 @@ async function main(){
   assert.equal(read('motionHistory.length'),1);
   assert.match(elements.get('motionValues').textContent,/Z: 9.810/);
   assert.equal(read('motionHistory[0].a[1]'),-0.2,'signed acceleration preserved');
+  assert.ok(scheduled.filter(ms=>ms===1000).length>=2,'both polling streams scheduled at 1 Hz');
+  assert.ok(!scheduled.includes(100),'no remaining 10 Hz polling');
+  assert.ok(scheduled.includes(1000),'environmental polling remains 1 Hz');
   assert.equal(read('history[0].t[1]'),22);
   assert.ok(strokes.includes(0.3),'extrema drawn at 30% opacity');
   assert.ok(strokes.includes(1),'mean drawn at full opacity');
@@ -53,12 +62,24 @@ async function main(){
   assert.ok(paths.some(p=>p.alpha===0.3&&p.commands==='MLLL'),'extrema stay connected at 30% opacity');
   response={...response,sequence:5,uptime_ms:25000,sensor_ok:false,error:'Incomplete window',temperature_c:null,history:[point(5,0,false)]};
   await read('poll()');assert.match(elements.get('error').textContent,/Incomplete/);
-  assert.equal(read('history[4].t'),null,'invalid five-second window creates a real gap');
+  assert.equal(read('history[4].t'),null,'invalid one-second window creates a real gap');
   assert.match(elements.get('motionValues').textContent,/9.810/,'BME error does not hide valid motion');
   response.motion={sequence:2,sample_age_ms:0,ok:false,error:'MPU6050 I2C read failed',acceleration_m_s2:[null,null,null]};
-  await read('poll()');
+  await read('pollMotion()');
   assert.match(elements.get('motionError').textContent,/I2C read failed/);
   assert.equal(read('motionHistory[1].a'),null,'failed MPU sample creates graph gap');
+  const environmentalCount=read('history.length');
+  const burst={uptime_ms:26000,motion:{sequence:12,ok:true,sample_count:100,fifo_overflows:2,warning:'No INT edges',acceleration_m_s2:[1,-2,9]},
+    history:Array.from({length:10},(_,i)=>({sequence:i+3,age_ms:(9-i)*1000,ok:true,a:[i,-i,9]}))};
+  read('consumeMotion('+JSON.stringify(burst)+',performance.now())');
+  assert.equal(read('lastMotionSequence'),12,'batch backfill consumes all ten reports');
+  assert.equal(read('motionHistory.length'),12,'missed one-second reports backfilled');
+  assert.match(elements.get('motionValues').textContent,/n=100/);
+  assert.match(elements.get('motionValues').textContent,/overflows: 2/);
+  assert.match(elements.get('motionError').textContent,/No INT edges/);
+  read('consumeMotion('+JSON.stringify(burst)+',performance.now())');
+  assert.equal(read('motionHistory.length'),12,'batch backfill remains deduplicated');
+  assert.equal(read('history.length'),environmentalCount,'motion updates do not alter BME history');
   assert.equal(elements.get('temperature').textContent,'\u2014');
   response={...response,sequence:1,uptime_ms:100,sensor_ok:true,error:'',temperature_c:24,history:[point(1)]};
   await read('poll()');assert.equal(read('history.length'),1,'restart clears history');
@@ -84,5 +105,7 @@ async function main(){
   console.log('PASS: syntax, mean/min/max, 30% opacity, deduplication, backfill, errors, restart, history expiry');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
+
+
 
 
