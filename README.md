@@ -201,3 +201,48 @@ publication intervals were 1000 ms. Interrupt counts increased; FIFO overflows
 were zero and both error fields were empty in all six checks. These short
 checks do not establish long-term error-free acquisition or visual smoothness.
 Refresh the browser to load the updated one-second polling code.
+
+## MPU6050 reset, scale verification and flat-pose calibration
+
+Incorrect static values were investigated using independent direct-register
+reads. Startup now explicitly resets the MPU device and accel/gyro/temperature
+signal paths, waits for settling only in setup, enables all axes and reads back
+scale, rate, FIFO layout and interrupt settings. Configuration mismatches are
+errors. Signed big-endian decoding is shared by FIFO/direct reads and includes
+compile-time checks for +1g/-1g, -1 count and negative full scale.
+
+After deploying the reset fix, direct and FIFO values agreed near X=0.41,
+Y=-0.41, Z=11.16 m/s^2. ACCEL_CONFIG was verified as 0 (16384 counts/g at +/-2g).
+This corrected the large axis errors but exposed remaining stationary bias.
+No clamping or normalization to 1g is used.
+
+The dashboard's **Calibrate flat (Z up)** button starts 500 raw samples (~5 s at
+100 Hz). Keep the module flat, completely still, with positive Z upward. The
+user must explicitly initiate calibration; there is no calibration at boot.
+The algorithm estimates constant offsets against [0,0,9.80665] m/s^2, preserving
+gravity and subsequent acceleration changes. It rejects samples with excessive
+variance, an implausible flat pose, excessive offsets or I2C/OTA interruptions.
+This is a single-pose bias calibration, not a six-position scale/cross-axis
+calibration. Check other orientations afterward if absolute accuracy matters.
+
+Offsets are saved as one NVS blob in Preferences namespace mpu6050, bias-v1,
+and restored after reboot. Completing calibration clears old motion history
+and the partially averaged window so corrected and uncorrected values are not
+mixed. BME history remains unaffected. Failed calibration does not apply new
+bias values; the dashboard displays the reason and enables retry.
+
+POST /api/motion/calibrate starts calibration; GET /api/motion reports
+calibrating, calibration_samples, calibration_error and bias_m_s2. GET
+/api/motion/diagnostics exposes raw counts, live scale/register readback,
+uncorrected direct acceleration/magnitude and corrected direct acceleration.
+These diagnostic reads do not change offsets or acquisition settings.
+
+Static-reading fix deployment: compiled successfully (1145291 flash bytes,
+95224 static RAM bytes), browser tests passed including calibration progress
+and rejection messages, and OTA upload succeeded. A five-second/500-frame flat
+Z-up calibration was performed on the module in the user's stated desk pose.
+It passed stationarity/pose checks and saved bias [0.391, -0.399, 1.372] m/s^2.
+Three subsequent one-second reports were [0.003,0.003,9.806],
+[-0.001,0.002,9.808], and [0.003,0.000,9.810] m/s^2, all marked valid.
+Calibration storage write succeeded; restoration across a future reboot and
+accuracy in other orientations have not yet been physically verified.

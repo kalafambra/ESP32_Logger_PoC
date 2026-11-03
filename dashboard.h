@@ -28,7 +28,7 @@ small{color:#cbaaaa}footer{margin:24px 0;color:#cbaaaa;font-size:.8rem;line-heig
 <article><h2>Temperature</h2><span class="value" id="temperature">—</span> <span class="unit">°C</span><canvas id="tempChart" role="img" aria-label="Temperature in degrees Celsius over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
 <article><h2>Relative humidity</h2><span class="value" id="humidity">—</span> <span class="unit">%</span><canvas id="humChart" role="img" aria-label="Relative humidity in percent over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
 <article><h2>Estimated sea-level pressure</h2><span class="value" id="pressure">—</span> <span class="unit">hPa</span><canvas id="pressureChart" role="img" aria-label="Sea-level pressure over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
-<article><h2>MPU6050 acceleration</h2><p id="motionValues">Waiting for motion sensor</p><p id="motionError" role="status"></p><small><span style="color:#ffb47f">X</span> · <span style="color:#e7b5ca">Y</span> · <span style="color:#e9d899">Z</span> · m/s², includes gravity · one-second means · 100 Hz acquisition target</small><canvas id="motionChart" role="img" aria-label="MPU6050 X Y Z acceleration in meters per second squared"></canvas><small>Time relative to now (seconds)</small></article>
+<article><h2>MPU6050 acceleration</h2><p id="motionValues">Waiting for motion sensor</p><p id="motionError" role="status"></p><button id="motionCalibrate" type="button" style="padding:10px 14px;border:1px solid #94606a;border-radius:9px;background:#48232d;color:#fff2e5;font:inherit;cursor:pointer">Calibrate flat (Z up)</button><p id="motionCalibrationStatus" role="status">Calibration removes fixed bias; gravity is retained.</p><small><span style="color:#ffb47f">X</span> · <span style="color:#e7b5ca">Y</span> · <span style="color:#e9d899">Z</span> · m/s², includes gravity · one-second means · 100 Hz acquisition target</small><canvas id="motionChart" role="img" aria-label="MPU6050 X Y Z acceleration in meters per second squared"></canvas><small>Time relative to now (seconds)</small></article>
 </main>
 <footer>Up to 600 seconds of history; shorter histories fill the graph width. Gaps indicate unavailable reports. Altitude adjusts the pressure estimate in this tab; reload restores the configured altitude. No internet services required.</footer>
 <script>
@@ -177,6 +177,8 @@ function consumeMotion(data,now){
   motionHistory.length=0;lastMotionSequence=null;
  }
  lastMotionUptime=data.uptime_ms;
+ $('motionCalibrate').disabled=!!motion.calibrating;
+ $('motionCalibrationStatus').textContent=motion.calibrating?'Calibrating: '+motion.calibration_samples+'/500 samples. Keep flat and still.':motion.calibration_error||'Calibration removes fixed bias; gravity is retained.';
  const ok=motion.ok&&Array.isArray(motion.acceleration_m_s2)&&motion.acceleration_m_s2.length===3&&motion.acceleration_m_s2.every(Number.isFinite);
  $('motionError').textContent=ok?(motion.warning||''):(motion.error||'MPU6050 unavailable');
  $('motionValues').textContent=ok?motion.acceleration_m_s2.map((v,i)=>['X','Y','Z'][i]+': '+v.toFixed(3)).join(' · ')+' m/s² · n='+(motion.sample_count??'?')+' · FIFO overflows: '+(motion.fifo_overflows??0):'—';
@@ -202,6 +204,16 @@ async function pollMotion(){
   draw(true);setTimeout(pollMotion,Math.max(0,1000-(performance.now()-started)));
  }
 }
+/* Calibration is explicit because assuming the board is flat on every boot would destroy valid orientation data. */
+$('motionCalibrate').addEventListener('click',async()=>{
+ if(!window.confirm('Place the module flat with positive Z up. Keep it completely still for five seconds. Start bias calibration?'))return;
+ $('motionCalibrate').disabled=true;
+ try{
+  const response=await fetch('/api/motion/calibrate',{method:'POST'});
+  if(!response.ok)throw new Error('HTTP '+response.status);
+  $('motionCalibrationStatus').textContent='Calibration starting. Keep flat and still for five seconds.';
+ }catch(error){$('motionCalibrationStatus').textContent='Calibration failed: '+error.message;$('motionCalibrate').disabled=false;}
+});
 window.addEventListener('resize',draw);
 setInterval(draw,1000);poll();pollMotion();
 </script>

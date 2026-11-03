@@ -365,6 +365,8 @@ void setup() {
   });
   server.on("/api/readings", HTTP_GET, sendReadings);
   server.on("/api/motion", HTTP_GET, sendMotionReadings);
+  server.on("/api/motion/diagnostics", HTTP_GET, sendMotionDiagnostics);
+  server.on("/api/motion/calibrate", HTTP_POST, startMotionCalibration);
   /* Serve the original binary PNG with an explicit length, including any zero bytes. */
   server.on("/fox.png", HTTP_GET, []() {
     server.sendHeader("Cache-Control", "public, max-age=3600");

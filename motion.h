@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <WebServer.h>
+#include <Preferences.h>
 extern WebServer server;
 
 constexpr uint8_t MPU_ADDRESS = 0x68; // AD0 tied to GND.
@@ -24,6 +25,21 @@ const char *motionError = "MPU6050 not initialized";
 portMUX_TYPE motionMux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool motionInterruptPending = false;
 volatile uint32_t motionInterrupts = 0;
+float motionBias[3] = {};
+bool motionCalibrating = false;
+unsigned motionCalibrationSamples = 0;
+double motionCalibrationSum[3] = {}, motionCalibrationSquares[3] = {};
+const char *motionCalibrationError = "";
+
+/* Explicit sign extension keeps both FIFO and direct-register decoding identical. */
+constexpr int32_t decodeMotionRaw(uint8_t high, uint8_t low) {
+  return ((uint32_t(high) << 8) | low) >= 32768 ?
+         int32_t((uint32_t(high) << 8) | low) - 65536 : int32_t((uint32_t(high) << 8) | low);
+}
+static_assert(decodeMotionRaw(0x40, 0x00) == 16384, "+1 g decoding");
+static_assert(decodeMotionRaw(0xC0, 0x00) == -16384, "-1 g decoding");
+static_assert(decodeMotionRaw(0xFF, 0xFF) == -1, "negative sign extension");
+static_assert(decodeMotionRaw(0x80, 0x00) == -32768, "negative full scale");
 
 /* Signal work only: I2C, allocation and serial output must never run in the ISR. */
 void ARDUINO_ISR_ATTR motionDataReadyISR() {
@@ -56,28 +72,76 @@ bool resetMotionFifo() {
          motionWrite(0x6A, 0x04) && motionWrite(0x6A, 0x40) && motionWrite(0x23, 0x08);
 }
 
+/* A CPU/OTA restart does not power-cycle the sensor: reset its registers and signal paths explicitly. */
+bool resetMotionDevice() {
+  if (!motionWrite(0x6B, 0x80)) return false;
+  // These bounded waits run only in setup, following the vendor/library reset sequence.
+  delay(100);
+  uint8_t power = 0x80;
+  for (unsigned attempt = 0; attempt < 20; ++attempt) {
+    if (!motionRead(0x6B, &power, 1)) return false;
+    if (!(power & 0x80)) break;
+    delay(10);
+  }
+  if (power & 0x80) return false;
+  if (!motionWrite(0x68, 0x07)) return false; // Reset accel, gyro and temperature signal paths.
+  delay(100);
+  if (!motionWrite(0x6B, 0x01) || !motionWrite(0x6C, 0x00)) return false;
+  delay(100); // Let the PLL and enabled sensor axes settle before configuration.
+  return true;
+}
+
+/* Verify scale, packet layout and timing rather than trusting acknowledged writes alone. */
+bool verifyMotionConfiguration() {
+  const uint8_t regs[] = {0x19, 0x1A, 0x1C, 0x23, 0x37, 0x38, 0x6A, 0x6B, 0x6C};
+  const uint8_t expected[] = {9, 3, 0, 8, 0x20, 0x11, 0x40, 1, 0};
+  for (unsigned i = 0; i < sizeof(regs); ++i) {
+    uint8_t actual;
+    if (!motionRead(regs[i], &actual, 1)) return false;
+    if (actual != expected[i]) {
+      Serial.printf("[mpu] Configuration mismatch reg=0x%02X actual=0x%02X expected=0x%02X\n", regs[i], actual, expected[i]);
+      return false;
+    }
+  }
+  return true;
+}
+
 /* Configure 100 Hz acceleration acquisition, using FIFO to absorb brief loop delays. */
 void setupMotion() {
   uint8_t identity = 0;
   pinMode(MPU_INTERRUPT_PIN, INPUT_PULLDOWN); // INT is configured as active-high push-pull.
   attachInterrupt(digitalPinToInterrupt(MPU_INTERRUPT_PIN), motionDataReadyISR, RISING);
   motionReady = motionRead(0x75, &identity, 1) && identity == 0x68;
+  if (motionReady) motionReady = resetMotionDevice();
   if (motionReady) {
     // DLPF=3 keeps acceleration bandwidth at 44 Hz, below the 50 Hz Nyquist limit.
     // The filtered internal clock is 1 kHz; divider=9 yields 100 Hz.
     motionReady = motionWrite(0x38, 0x00) && motionWrite(0x6B, 0x01) &&
                   motionWrite(0x1A, 0x03) && motionWrite(0x19, 0x09) &&
                   motionWrite(0x1C, 0x00) && motionWrite(0x37, 0x20) &&
-                  resetMotionFifo() && motionWrite(0x38, 0x11);
+                  resetMotionFifo() && motionWrite(0x38, 0x11) && verifyMotionConfiguration();
     // INT_PIN_CFG: latch high until INT_STATUS is read. Enable ready + overflow IRQs.
   }
   motionError = motionReady ? "Waiting for FIFO samples" : "MPU6050 initialization failed at 0x68; check wiring and reset";
+  // Restore only explicitly measured calibration; never assume a boot-time pose.
+  Preferences calibration;
+  if (calibration.begin("mpu6050", true)) {
+    float saved[3];
+    if (calibration.getBytesLength("bias-v1") == sizeof(saved) &&
+        calibration.getBytes("bias-v1", saved, sizeof(saved)) == sizeof(saved)) {
+      bool valid = true;
+      for (float value : saved) if (!isfinite(value) || fabsf(value) > 4.0f) valid = false;
+      if (valid) for (unsigned i = 0; i < 3; ++i) motionBias[i] = saved[i];
+    }
+    calibration.end();
+  }
   motionStartedAt = motionLastReport = millis();
   Serial.printf("[mpu] %s; INT=GPIO%d, report=1000 ms\n", motionReady ? "FIFO acquisition configured for 100 Hz" : motionError, MPU_INTERRUPT_PIN);
 }
 
 /* Suspend FIFO during OTA, since a firmware transfer intentionally blocks acquisition. */
 void pauseMotion() {
+  if (motionCalibrating) { motionCalibrating = false; motionCalibrationError = "Calibration cancelled by OTA"; }
   motionPaused = true;
   if (motionReady) { motionWrite(0x38, 0); motionWrite(0x23, 0); motionWrite(0x6A, 0); }
 }
@@ -95,9 +159,45 @@ void resumeMotion() {
 
 /* Reset framing on bus/overflow faults and mark this report as incomplete rather than averaging bad data. */
 void motionFault(const char *message) {
+  if (motionCalibrating) { motionCalibrating = false; motionCalibrationError = "Calibration cancelled by sensor read error"; }
   motionWindowFailed = true;
   motionError = message;
   if (!resetMotionFifo()) motionError = "MPU6050 I2C/FIFO recovery failed";
+}
+
+/* Measure constant bias only in the explicitly requested stationary, flat, Z-up pose. */
+void finishMotionCalibration() {
+  motionCalibrating = false;
+  float mean[3], proposed[3];
+  for (unsigned i = 0; i < 3; ++i) {
+    mean[i] = motionCalibrationSum[i] / motionCalibrationSamples;
+    const double variance = motionCalibrationSquares[i] / motionCalibrationSamples - double(mean[i]) * mean[i];
+    if (variance > 0.0225) { motionCalibrationError = "Module moved; keep stationary for calibration"; return; }
+    proposed[i] = mean[i] - (i == 2 ? 9.80665f : 0.0f);
+    if (fabsf(proposed[i]) > 4.0f) { motionCalibrationError = "Bias too large; check flat Z-up pose or sensor hardware"; return; }
+  }
+  if (fabsf(mean[0]) > 2 || fabsf(mean[1]) > 2 || mean[2] < 4.9f) {
+    motionCalibrationError = "Place module flat with positive Z pointing up"; return;
+  }
+  Preferences calibration;
+  if (!calibration.begin("mpu6050", false)) { motionCalibrationError = "Cannot open calibration storage"; return; }
+  const bool stored = calibration.putBytes("bias-v1", proposed, sizeof(proposed)) == sizeof(proposed);
+  calibration.end();
+  if (!stored) { motionCalibrationError = "Cannot save calibration"; return; }
+  for (unsigned i = 0; i < 3; ++i) { motionBias[i] = proposed[i]; motionSum[i] = 0; }
+  // Clear old uncorrected motion history and the window straddling the change.
+  motionSamples = 0; motionHistoryCount = 0; motionHead = 0; motionLatest = MotionReport{};
+  motionLastReport = millis(); motionCalibrationError = "";
+  Serial.printf("[mpu] Flat Z-up calibration saved: bias %.4f %.4f %.4f m/s^2\n", motionBias[0], motionBias[1], motionBias[2]);
+}
+
+/* Start five seconds of raw samples on explicit request; a reboot never triggers calibration. */
+void startMotionCalibration() {
+  if (!motionReady || motionPaused || motionCalibrating) { server.send(409, "application/json", "{\"error\":\"Sensor unavailable or calibration already running\"}"); return; }
+  motionCalibrationSamples = 0;
+  for (unsigned i = 0; i < 3; ++i) motionCalibrationSum[i] = motionCalibrationSquares[i] = 0;
+  motionCalibrationError = ""; motionCalibrating = true;
+  server.send(202, "application/json", "{\"status\":\"Keep module flat, stationary, positive Z up for five seconds\"}");
 }
 
 /* Publish a one-second aggregate instead of flooding serial and Wi-Fi with 100 raw frames/s. */
@@ -157,13 +257,16 @@ void acquireMotion() {
           else for (unsigned frame = 0; frame < frames; ++frame) {
             for (unsigned axis = 0; axis < 3; ++axis) {
               const unsigned offset = frame * 6 + axis * 2;
-              const int16_t raw = int16_t((uint16_t(data[offset]) << 8) | data[offset + 1]);
+              const int32_t raw = decodeMotionRaw(data[offset], data[offset + 1]);
               const float value = raw * (9.80665f / 16384.0f); // +/-2 g, includes gravity.
-              motionSum[axis] += value;
-              if (!motionSamples || value < motionMin[axis]) motionMin[axis] = value;
-              if (!motionSamples || value > motionMax[axis]) motionMax[axis] = value;
+              if (motionCalibrating) { motionCalibrationSum[axis] += value; motionCalibrationSquares[axis] += double(value) * value; }
+              const float corrected = value - motionBias[axis]; // Constant bias subtraction, never normalization/clipping.
+              motionSum[axis] += corrected;
+              if (!motionSamples || corrected < motionMin[axis]) motionMin[axis] = corrected;
+              if (!motionSamples || corrected > motionMax[axis]) motionMax[axis] = corrected;
             }
             ++motionSamples;
+            if (motionCalibrating && ++motionCalibrationSamples >= 500) finishMotionCalibration();
           }
         }
         // Keep draining a backlog on the next loop pass even if the IRQ was coalesced.
@@ -197,6 +300,10 @@ void appendMotion(String &json, uint32_t now) {
   json += ",\"acceleration_m_s2\":"; motionArray(json, motionLatest.mean, valid);
   json += ",\"minimum_m_s2\":"; motionArray(json, motionLatest.minimum, valid);
   json += ",\"maximum_m_s2\":"; motionArray(json, motionLatest.maximum, valid);
+  json += ",\"bias_m_s2\":"; motionArray(json, motionBias, true);
+  json += ",\"calibrating\":"; json += motionCalibrating ? "true" : "false";
+  json += ",\"calibration_samples\":" + String(motionCalibrationSamples);
+  json += ",\"calibration_error\":\""; json += motionCalibrationError; json += '"';
   json += '}';
 }
 
@@ -219,6 +326,42 @@ void sendMotionReadings() {
     json += ",\"a\":"; motionArray(json, report.mean, report.ok); json += '}';
   }
   json += "]}";
+  server.sendHeader("Cache-Control", "no-store"); server.send(200, "application/json", json);
+}
+
+/* Compare direct sensor registers with FIFO output without changing scale, offsets or gravity. */
+void sendMotionDiagnostics() {
+  uint8_t raw[6], range = 0;
+  const bool ok = motionRead(0x1C, &range, 1) && motionRead(0x3B, raw, sizeof(raw));
+  String json = "{\"ok\":"; json += ok ? "true" : "false";
+  json += ",\"accel_config\":" + String(range);
+  const float scales[] = {16384, 8192, 4096, 2048};
+  const float scale = scales[(range >> 3) & 3];
+  json += ",\"counts_per_g\":" + String(scale, 0) + ",\"raw_xyz\":[";
+  float direct[3] = {};
+  for (unsigned i = 0; i < 3; ++i) {
+    if (i) json += ',';
+    if (!ok) json += "null";
+    else {
+      const int32_t value = decodeMotionRaw(raw[2 * i], raw[2 * i + 1]);
+      json += String(value);
+      direct[i] = value * (9.80665f / scale);
+    }
+  }
+  json += "],\"direct_m_s2\":"; motionArray(json, direct, ok);
+  json += ",\"direct_magnitude_m_s2\":";
+  json += ok ? String(sqrtf(direct[0]*direct[0] + direct[1]*direct[1] + direct[2]*direct[2]), 3) : String("null");
+  float corrected[3]; for (unsigned i = 0; i < 3; ++i) corrected[i] = direct[i] - motionBias[i];
+  json += ",\"corrected_direct_m_s2\":"; motionArray(json, corrected, ok);
+  json += ",\"registers\":{";
+  const uint8_t regs[] = {0x19, 0x1A, 0x1C, 0x23, 0x6A, 0x6B, 0x6C, 0x75};
+  for (unsigned i = 0; i < sizeof(regs); ++i) {
+    if (i) json += ',';
+    uint8_t value;
+    json += "\"0x" + String(regs[i], HEX) + "\":";
+    json += motionRead(regs[i], &value, 1) ? String(value) : String("null");
+  }
+  json += "}}";
   server.sendHeader("Cache-Control", "no-store"); server.send(200, "application/json", json);
 }
 

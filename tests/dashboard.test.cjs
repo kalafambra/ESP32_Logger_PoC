@@ -80,6 +80,13 @@ async function main(){
   read('consumeMotion('+JSON.stringify(burst)+',performance.now())');
   assert.equal(read('motionHistory.length'),12,'batch backfill remains deduplicated');
   assert.equal(read('history.length'),environmentalCount,'motion updates do not alter BME history');
+  const calibrating={...burst,motion:{...burst.motion,calibrating:true,calibration_samples:250}};
+  read('consumeMotion('+JSON.stringify(calibrating)+',performance.now())');
+  assert.equal(elements.get('motionCalibrate').disabled,true);
+  assert.match(elements.get('motionCalibrationStatus').textContent,/250\/500/);
+  read('consumeMotion('+JSON.stringify({...burst,motion:{...burst.motion,calibrating:false,calibration_error:'Module moved'}})+',performance.now())');
+  assert.equal(elements.get('motionCalibrate').disabled,false);
+  assert.match(elements.get('motionCalibrationStatus').textContent,/Module moved/);
   assert.equal(elements.get('temperature').textContent,'\u2014');
   response={...response,sequence:1,uptime_ms:100,sensor_ok:true,error:'',temperature_c:24,history:[point(1)]};
   await read('poll()');assert.equal(read('history.length'),1,'restart clears history');
