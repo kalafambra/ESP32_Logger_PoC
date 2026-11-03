@@ -5,6 +5,7 @@
 #include "pickup_detector.h"
 #include "pickup_selftest.h"
 #include "pickup_debug.h"
+#include "pickup_events.h"
 extern WebServer server;
 
 PickupDetector pickup;
@@ -65,14 +66,15 @@ void invalidatePickup(const char *reason) {
 
 /* Load versioned, validated settings; corrupt or absent storage safely falls back to code defaults. */
 void setupPickup() {
-  pickupSelfTestsPassed = runPickupSelfTests(pickup);
+  pickupSelfTestsPassed = pickup.configure(PickupSettings{})&&runPickupSelfTests(pickup);
   Serial.printf("[pickup] Algorithm self-tests: %s\n", pickupSelfTestsPassed ? "PASS" : "FAIL (detector disabled)");
   struct Stored { uint32_t version; PickupSettings settings; } stored;
   Preferences prefs;
   if (prefs.begin("pickup",true)) {
     if (prefs.getBytesLength("settings") == sizeof(stored) && prefs.getBytes("settings",&stored,sizeof(stored)) == sizeof(stored) &&
         stored.version == 1 && !validatePickupSettings(stored.settings)) {
-      pickup.configure(stored.settings); pickupPersisted = true;
+      pickupPersisted=pickup.configure(stored.settings);
+      if(!pickupPersisted)Serial.println("[pickup] Saved window allocation failed; retaining defaults");
     }
     prefs.end();
   }
@@ -90,11 +92,13 @@ void processPickupSample(const float *a,const float *w,uint32_t now) {
   if (pickupDataValid && now-pickupLastSampleMs > pickup.settings.max_gap_ms) pickup.reset();
   pickupLastSampleMs = now; pickupDataValid = true; pickupDataError = "";
   pickup.process(a,w);
+  pickupEvents.observe(pickup.active,pickup.confirmedTriggerMask);
   if(pickupDebug.capture(pickup,pickupDataValid,now,pickupDebugGapPeak,0,pickupLedOn,pickupSettingsRevision))pickupDebugGapPeak=0;
 }
 
 /* Publish state transitions and synchronize the dedicated LED timer without delays or acquisition pulses. */
 void servicePickup(uint32_t now) {
+  pickupEvents.service(now);
   if (pickupDataValid && now-pickupLastSampleMs > pickup.settings.max_gap_ms) invalidatePickup("Motion sample gap; waiting for fresh baseline");
   if (pickup.active != pickupPreviousActive) {
     Serial.printf("[pickup] %s\n",pickup.active ? "Picked up" : "Stationary again; alert cleared and detector re-armed");
@@ -162,6 +166,7 @@ void sendPickupSettings() {
 
 /* Persist one versioned blob before applying; a failed save must not silently change runtime behavior. */
 bool savePickupSettings(const PickupSettings &settings) {
+  if(!pickup.reserveWindow(settings))return false;
   struct Stored { uint32_t version; PickupSettings settings; } stored{1,settings};
   Preferences prefs;
   if (!prefs.begin("pickup",false)) return false;

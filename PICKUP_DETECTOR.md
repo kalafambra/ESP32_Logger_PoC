@@ -300,5 +300,10 @@ timestamps. Tilt and departure relative to the old baseline do not block clearin
 in a new resting orientation. Trigger, blocker and event-counter snapshots are
 also included in debug JSON/CSV. Missing records do not imply inferred transitions.
 Markers require the tuning page to be capturing; they are not a persistent log.
+The detector window now allocates storage for the configured duration (7,200
+bytes at the default 3 s / 100 Hz), rather than permanently reserving 24,000
+bytes for the maximum 10 s. Runtime growth is checked before settings are
+persisted; insufficient memory rejects the change without discarding evidence.
+Startup self-tests cover growth to 10 s and shrinking to defaults.
 All thresholds and detector behavior remain unchanged. Physical pickup/clearing
 and visual browser verification remain manual checks after flashing this version.

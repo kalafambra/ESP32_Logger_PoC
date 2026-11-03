@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include <cmath>
 #include <cstdint>
+#include <new>
 
 /* All detector thresholds and timing defaults live here, independent of hardware/HTTP. */
 struct PickupSettings {
@@ -20,6 +21,10 @@ struct PickupSettings {
 
 class PickupDetector {
  public:
+  PickupDetector() = default;
+  PickupDetector(const PickupDetector &) = delete;
+  PickupDetector &operator=(const PickupDetector &) = delete;
+  ~PickupDetector(){delete[] samples;}
   static constexpr unsigned SAMPLE_MS = 10; // MPU configuration: 100 Hz.
   static constexpr unsigned MAX_SAMPLES = 1000; // Maximum configurable stillness window: 10 s.
   PickupSettings settings;
@@ -46,13 +51,30 @@ class PickupDetector {
   }
 
   /* Apply settings atomically after external validation/storage, then learn a fresh baseline. */
-  void configure(const PickupSettings &next) { settings = next; reset(true); }
+  bool configure(const PickupSettings &next) {
+    if(!reserveWindow(next))return false;
+    const unsigned n=windowSize(next);
+    // Shrinking is optional: retain the larger allocation if fragmentation prevents replacement.
+    if(n<sampleCapacity){
+      if(auto *smaller=new(std::nothrow) Sample[n]){delete[] samples;samples=smaller;sampleCapacity=n;}
+    }
+    settings = next; reset(true);return true;
+  }
+
+  /* Preflight growth before persisting settings; failed allocation preserves current evidence. */
+  bool reserveWindow(const PickupSettings &next){
+    const unsigned n=windowSize(next);if(n<=sampleCapacity)return true;
+    auto *larger=new(std::nothrow) Sample[n];if(!larger)return false;
+    for(unsigned i=0;i<count;++i)larger[i]=samples[i]; // Only initialized window entries are needed.
+    delete[] samples;samples=larger;sampleCapacity=n;return true;
+  }
 
   /* Return observed quiet duration, capped at the configured window. */
   unsigned quietMs() const { return count * SAMPLE_MS; }
 
   /* Evaluate each FIFO frame, not the one-second published average. */
   void process(const float *a, const float *w) {
+    if(!samples){reset();return;} // An unavailable buffer must never look like confirmed stillness.
     for (unsigned i = 0; i < 3; ++i) if (!std::isfinite(a[i]) || !std::isfinite(w[i])) { reset(); return; }
 
     // BLOCK 1: low-pass event features, while retaining unfiltered data for stillness/noise.
@@ -114,7 +136,9 @@ class PickupDetector {
   }
 
  private:
-  struct Sample { float a[3], w[3]; } samples[MAX_SAMPLES];
+  struct Sample { float a[3], w[3]; };
+  Sample *samples=nullptr;
+  unsigned sampleCapacity=0;
   unsigned head = 0, count = 0;
   double sumA[3] = {}, sumW[3] = {}, sumA2 = 0, sumW2 = 0;
   float baseline[3] = {}, gyroBias[3] = {}, fa[3] = {}, fw[3] = {};
@@ -140,10 +164,11 @@ class PickupDetector {
   }
 
   /* Sampling cadence turns the runtime duration into a bounded number of raw frames. */
-  unsigned windowSize() const {
-    unsigned n = unsigned(std::ceil(settings.stationary_ms / SAMPLE_MS));
+  static unsigned windowSize(const PickupSettings &s) {
+    unsigned n = unsigned(std::ceil(s.stationary_ms / SAMPLE_MS));
     return n > MAX_SAMPLES ? MAX_SAMPLES : n < 2 ? 2 : n;
   }
+  unsigned windowSize() const {return windowSize(settings);}
 
   /* Forget timing/statistics only; fixed learned reference survives while armed or alerting. */
   void clearWindow() {

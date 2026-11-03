@@ -58,11 +58,13 @@ and gives more wiring margin than the former 400 kHz setting. The LED is reserve
 2. Install esp32 by Espressif Systems in Boards Manager. Additional URL:
    https://espressif.github.io/arduino-esp32/package_esp32_index.json
 3. Install Adafruit BME280 Library and its BusIO/Unified Sensor dependencies.
+   Install **NimBLE-Arduino by h2zero, version 2.5.2** in Library Manager for BLE.
    MPU access uses Wire directly and needs no additional library.
 4. Set Wi-Fi credentials, DEFAULT_ALTITUDE_M and OTA_PASSWORD in config.h.
    Wi-Fi must be 2.4 GHz. OTA requires at least 12 password characters; empty
    disables OTA. Do not share configuration or compiled firmware containing secrets.
-5. Select ESP32 Dev Module and the default OTA-capable partition scheme.
+5. Select ESP32 Dev Module and **No FS 4MB (2MB APP x2)** (this supports OTA).
+   Keep this OTA-capable layout for the BLE firmware; first install it by USB.
 6. Verify, select COM5 (or your current port), and Upload. Close Serial Monitor
    first. If Connecting stalls, hold BOOT until writing starts, then release.
 7. Open serial at 115200 baud, reset, and use the printed dashboard http:// IP.
@@ -86,18 +88,19 @@ new one takes effect after reboot. Keep OTA support and working Wi-Fi in future
 firmware. USB remains the recovery method if the board cannot connect or boot.
 Use an OTA-capable partition scheme; No OTA/Huge APP schemes are unsuitable.
 During transfer, sampling/HTTP pause and MPU FIFO generation stops. The independent pickup LED timer continues an already-active alert. A failed transfer resets the FIFO and discards interrupted windows.
-A successful update reboots and clears device RAM history.
+A successful update reboots and clears device RAM graph history. The pickup
+event journal survives in NVS; an unfinished event is marked interrupted.
 
 If discovery fails, check the IP, same-LAN access, VPN/client isolation and
 private-network firewall permissions. mDNS uses UDP 5353; OTA listens on UDP
 3232 and connects back to the uploader TCP listener. The helper uses local TCP
 32320 and does not put the password in command arguments or logs.
 
-Current build directory: build-fox/ (the earlier build/ had a locked file).
-Both folders are ignored by Git. Compile with an available Arduino CLI:
+Current BLE build directory: build-ble/. Earlier builds used build-fox/ and
+build/; all are ignored by Git. Compile with an available Arduino CLI:
 
 ```text
-arduino-cli compile --fqbn esp32:esp32:esp32 --build-path ./build-fox .
+arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=no_fs --build-path ./build-ble .
 ```
 
 For a precompiled wireless application image, scripts/upload_ota.py accepts
@@ -283,3 +286,8 @@ zero-rate calibration, independent of flat-pose accelerometer calibration.
 Gyro readouts, rotation debug plots, configuration controls and debug CSV now
 use deg/s. The API/stored detector settings retain rad/s, with display conversion
 metadata for compatibility. See PICKUP_DETECTOR.md for details and caveats.
+
+BLE event history: see [BLE_EVENTS.md](BLE_EVENTS.md) for nRF Connect UUIDs,
+ten-event persistent storage, UTC handling, and phone/USB verification. This
+version requires the **No FS 4MB (2MB APP x2)** partition
+scheme and a one-time USB upload before OTA can resume with the larger binary.

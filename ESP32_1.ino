@@ -5,6 +5,7 @@
 #include <ArduinoOTA.h>
 #include <Adafruit_BME280.h>
 #include <math.h>
+#include <new>
 #include "config.h"
 #include "dashboard.h"
 #include "fox_image.h"
@@ -12,6 +13,7 @@
 #include "pickup_io.h"
 #include "pickup_tuning.h"
 #include "motion.h"
+#include "pickup_ble.h"
 
 Adafruit_BME280 bme;
 WebServer server(80);
@@ -21,6 +23,8 @@ uint32_t lastStart = 0, conversionStart = 0, windowStart = 0;
 uint32_t lastReconnect = 0;
 bool wifiRestartPending = false;
 bool otaConfigured = false, otaStarted = false;
+bool httpStarted = false, timeSyncStarted = false, wifiDriverReady = false;
+bool radioServicesReady = false;
 constexpr uint32_t WIFI_ATTEMPT_MS = 30000;
 constexpr uint32_t WIFI_RESTART_PAUSE_MS = 250;
 constexpr uint32_t PUBLISH_INTERVAL_MS = 1000;
@@ -30,8 +34,10 @@ static_assert(DEFAULT_ALTITUDE_M >= -500 && DEFAULT_ALTITUDE_M <= 9000,
               "Set DEFAULT_ALTITUDE_M between -500 and 9000 meters");
 SampleWindow window;
 PublishedSample latest;
-constexpr unsigned HISTORY_SIZE = 602;
-PublishedSample publishedHistory[HISTORY_SIZE];
+constexpr unsigned MAX_HISTORY_SIZE = 602;
+unsigned HISTORY_SIZE = 1;
+PublishedSample historyFallback;
+PublishedSample *publishedHistory = &historyFallback;
 unsigned historyHead = 0, historyCount = 0;
 bool windowFailed = false;
 const char *sensorError = "Sensor not initialized";
@@ -273,6 +279,8 @@ void setup() {
   Serial.begin(115200);
   Serial.println("\nESP32 BME280: 5 Hz acquisition, 1 s mean/min/max, SDA=21 SCL=22");
   setupPickup(); // Tests, persistent settings and exclusive LED ownership.
+  Serial.printf("[events] Journal self-tests: %s\n",runPickupEventSelfTests()?"PASS":"FAIL");
+  pickupEvents.begin(); // Restore the last ten events before acquisition starts.
   // Leave OTA disabled until a sufficiently long password has been configured.
   if (strlen(OTA_PASSWORD) >= 12) {
     ArduinoOTA.setHostname(OTA_HOSTNAME);
@@ -343,11 +351,13 @@ void setup() {
   windowStart = millis();
   lastStart = windowStart - SAMPLE_INTERVAL_MS;
   WiFi.onEvent(wifiEvent);
-  WiFi.mode(WIFI_STA);
+  wifiDriverReady=WiFi.mode(WIFI_STA); // Reserve Wi-Fi task/queue memory before optional BLE/history.
   // One application-owned retry policy avoids racing automatic reconnect.
   WiFi.setAutoReconnect(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD); // Start asynchronously; do not wait for an IP here.
-  Serial.println("[wifi] Connecting to configured 2.4 GHz network");
+  if(wifiDriverReady){
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD); // Start asynchronously; do not wait for an IP here.
+    Serial.println("[wifi] Connecting to configured 2.4 GHz network");
+  }else Serial.println("[wifi] Driver initialization failed; retry scheduled, HTTP not started");
   lastReconnect = millis();
   /* Serve the embedded page from flash so the dashboard needs no filesystem/internet. */
   server.on("/", HTTP_GET, []() {
@@ -366,6 +376,13 @@ void setup() {
     server.send_P(200,"text/html; charset=utf-8",PICKUP_TUNING_HTML);
   });
   server.on("/api/pickup/status", HTTP_GET, sendPickupStatus);
+  server.on("/api/pickup/events",HTTP_GET,[](){
+    String json="{\"ble_ready\":"+String(pickupBleReady?"true":"false")+",\"free_heap\":"+String(ESP.getFreeHeap())+
+      ",\"largest_free_block\":"+String(ESP.getMaxAllocHeap())+",\"history_capacity\":"+String(HISTORY_SIZE)+
+      ",\"metadata\":"+pickupEvents.metadataJson()+",\"events\":[";
+    for(unsigned i=0;i<10;++i){if(i)json+=',';json+=pickupEvents.eventJson(i);}json+="]}";
+    server.sendHeader("Cache-Control","no-store");server.send(200,"application/json",json);
+  });
   server.on("/api/pickup/settings", HTTP_POST, updatePickupSettings);
   server.on("/api/pickup/defaults", HTTP_POST, restorePickupDefaults);
   /* Serve the original binary PNG with an explicit length, including any zero bytes. */
@@ -375,9 +392,26 @@ void setup() {
   });
   /* Return an actual missing-resource status instead of misleading dashboard content. */
   server.onNotFound([]() { server.send(404, "text/plain", "Not found"); });
-  server.begin();
   windowStart = millis();
   lastStart = windowStart - SAMPLE_INTERVAL_MS;
+}
+
+/* Allocate optional services only after Wi-Fi gets its IP and HTTP/OTA have reserved their memory. */
+void startOptionalServices(){
+  Serial.printf("[memory] Before BLE: free=%u largest=%u\n",ESP.getFreeHeap(),ESP.getMaxAllocHeap());
+  if(ESP.getFreeHeap()>=81920&&ESP.getMaxAllocHeap()>=32768)setupPickupBle();
+  else Serial.println("[ble] Skipped: need 80 KiB free / 32 KiB contiguous; see [memory] diagnostic");
+  // History is optional: keep 64 KiB available for HTTP/debug/OTA and phone connections.
+  const size_t free=ESP.getFreeHeap(),largest=ESP.getMaxAllocHeap();
+  const unsigned affordable=free>65536?(free-65536)/sizeof(PublishedSample):0;
+  const unsigned contiguous=largest>1024?(largest-1024)/sizeof(PublishedSample):0;
+  const unsigned capacity=min(MAX_HISTORY_SIZE,min(affordable,contiguous));
+  if(capacity>=2){
+    if(auto *history=new(std::nothrow) PublishedSample[capacity]){publishedHistory=history;HISTORY_SIZE=capacity;}
+  }
+  Serial.printf("[history] Environmental backfill capacity: %u reports; browser retains 600 s\n",HISTORY_SIZE);
+  Serial.printf("[memory] Radios/routes/history: free=%u largest=%u minimum=%u\n",ESP.getFreeHeap(),ESP.getMaxAllocHeap(),ESP.getMinFreeHeap());
+  radioServicesReady=true;
 }
 
 /*
@@ -391,12 +425,16 @@ void loop() {
   publishWindow(millis());
   acquireSensor();
   acquireMotion(); // Drain FIFO and publish independent one-second motion reports.
-  server.handleClient();
+  if(httpStarted)server.handleClient();
   acquireMotion(); // Service data accumulated while a synchronous client was handled.
   const uint32_t now = millis();
   servicePickup(now); // The only feature allowed to request LED changes.
+  servicePickupBle();
   static bool wasConnected = false;
   const bool connected = WiFi.status() == WL_CONNECTED;
+  // Never create a listening socket after a failed Wi-Fi driver initialization.
+  if(connected&&!httpStarted){server.begin();httpStarted=true;}
+  if(connected&&!timeSyncStarted){configTime(0,0,"pool.ntp.org","time.nist.gov");timeSyncStarted=true;}
   // Bind OTA only after an IP is available, and reinitialize after a Wi-Fi loss.
   if (connected && otaConfigured && !otaStarted) {
     ArduinoOTA.begin();
@@ -407,6 +445,8 @@ void loop() {
     ArduinoOTA.end();
     otaStarted = false;
   }
+  // A disconnected network still permits BLE after the driver's initial connection attempt finishes.
+  if(!radioServicesReady&&(connected||now>=WIFI_ATTEMPT_MS))startOptionalServices();
   // Log transitions once, rather than repeating the address on every loop pass.
   if (connected != wasConnected) {
     if (connected) Serial.printf("[wifi] Dashboard: http://%s/\n", WiFi.localIP().toString().c_str());
@@ -416,7 +456,11 @@ void loop() {
   if (connected) {
     lastReconnect = now;
     wifiRestartPending = false;
-  } else if (!wifiRestartPending && now - lastReconnect >= WIFI_ATTEMPT_MS) {
+  } else if(!wifiDriverReady&&now-lastReconnect>=WIFI_ATTEMPT_MS){
+    lastReconnect=now;wifiDriverReady=WiFi.mode(WIFI_STA);
+    if(wifiDriverReady)WiFi.begin(WIFI_SSID,WIFI_PASSWORD);
+    else Serial.println("[wifi] Driver still unavailable; retry in 30 s");
+  } else if (wifiDriverReady&&!wifiRestartPending && now - lastReconnect >= WIFI_ATTEMPT_MS) {
     // Cancel the old association/DHCP attempt before starting another.
     // Keep the radio on and preserve credentials. No delay() in this loop.
     Serial.printf("[wifi] No IP after 30 s (status=%d); cancelling old attempt\n", WiFi.status());

@@ -31,5 +31,10 @@ inline bool runPickupSelfTests(PickupDetector &p) {
   fresh(); feed(flat,spin,600); if(p.armed||p.active)return false;
   // Adaptive noise and thresholds remain finite for a perfectly quiet baseline.
   fresh(); feed(flat,still,300); if(!std::isfinite(p.baselineNoise))return false;
+  PickupSettings longer;longer.stationary_ms=10000;
+  if(!p.configure(longer))return false;
+  feed(flat,still,999);if(p.armed)return false;
+  feed(flat,still,1);if(!p.armed)return false; // Growing retains the full configurable ten-second window.
+  if(!p.configure(PickupSettings{}))return false; // Shrinking releases unused samples.
   fresh(); return true;
 }
