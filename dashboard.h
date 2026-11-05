@@ -8,20 +8,22 @@ const char DASHBOARD_HTML[] PROGMEM = R"DASHBOARD(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ESP32 Environmental Monitor</title>
 <style>
-:root{color-scheme:dark;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#21151d;color:#fff2e5}
-*{box-sizing:border-box}body{max-width:1100px;margin:auto;padding:32px 24px;background:radial-gradient(ellipse at top left,#48232d88,transparent 65%)}
-.brand{display:flex;gap:24px;align-items:center;margin-bottom:28px}.fox-mark{width:116px;height:116px;flex:none;object-fit:cover;object-position:bottom;background:#ffdfcb;border:3px solid #e6a078;border-radius:24px;image-rendering:pixelated;box-shadow:0 8px 28px #10090e66}
-h1{font-size:clamp(1.7rem,4vw,2.65rem);letter-spacing:-.04em;margin:4px 0 10px;font-weight:750}.eyebrow{text-transform:uppercase;letter-spacing:.18em;color:#f5b384;font-size:.72rem;font-weight:750}.brand p{margin:0}
-p{color:#d6b9b8;line-height:1.6}.status{padding:16px 20px;background:#30212a;border:1px solid #69414a;border-left:3px solid #f5b384;border-radius:14px;margin:20px 0}
-#connection{font-weight:700;color:#ffdfcb}#detail{margin-top:4px;color:#d6b9b8;font-size:.87rem}#error{color:#ffadba;min-height:1.5em}.cards{display:grid;grid-template-columns:minmax(0,1fr);gap:20px}
-input{font:inherit;padding:10px 12px;width:140px;border:1px solid #94606a;border-radius:9px;background:#21151d;color:#fff2e5}input:focus-visible{outline:2px solid #ffc294;outline-offset:3px}input:disabled{opacity:.5}#altitudeError{color:#ffadba}.settings{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:20px 0}.settings label{font-weight:600;font-size:.9rem}
-article{background:linear-gradient(135deg,#34242e,#2b1e27);border:1px solid #69414a;border-radius:20px;padding:24px;min-width:0;box-shadow:0 6px 24px #10090e30}h2{font-size:.82rem;text-transform:uppercase;letter-spacing:.1em;color:#eec4b4;margin:0 0 12px}
-.value{font-size:2.5rem;font-weight:650;letter-spacing:-.04em;font-variant-numeric:tabular-nums}.unit{font-size:1rem;color:#d6b9b8}canvas{width:100%;height:240px;display:block;margin-top:18px}#dewPoint{color:#ffd5a8}
-small{color:#cbaaaa}footer{margin:24px 0;color:#cbaaaa;font-size:.8rem;line-height:1.6}
-@media(max-width:540px){body{padding:20px 14px}.brand{gap:16px}.fox-mark{width:82px;height:82px;border-radius:18px}.brand p{font-size:.8rem}article{padding:18px}}
-.pickup-banner{padding:16px 20px;border:1px solid #94606a;border-radius:14px;margin:16px 0;font-weight:650}.pickup-banner.active{background:#6b263c;border-color:#ffb47f;color:#fff2e5}.pickup-settings{margin:20px 0;padding:18px;border:1px solid #69414a;border-radius:14px;background:#30212a}.pickup-settings summary{cursor:pointer;font-weight:650}.pickup-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin:20px 0}.pickup-fields label{display:flex;flex-direction:column;gap:7px;font-size:.85rem}.pickup-fields input{width:100%}.pickup-settings button{font:inherit;padding:10px 14px;border:1px solid #94606a;border-radius:8px;background:#48232d;color:#fff2e5;cursor:pointer;margin:4px}.pickup-settings button:disabled{opacity:.5;cursor:wait}
+:root{color-scheme:dark;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#11161d;color:#e4e9ef}
+*{box-sizing:border-box}body{max-width:1100px;margin:auto;padding:32px 24px;background:#11161d}
+.brand{margin-bottom:28px}
+a{color:#91b6d8;text-underline-offset:3px}a:hover{color:#c1d8ec}
+button{font:inherit;padding:10px 14px;border:1px solid #46566a;border-radius:8px;background:#253344;color:#e4e9ef;cursor:pointer}button:hover{background:#304259}button:focus-visible{outline:2px solid #9fc5e5;outline-offset:3px}
+h1{font-size:clamp(1.7rem,4vw,2.65rem);letter-spacing:-.04em;margin:4px 0 10px;font-weight:750}.eyebrow{text-transform:uppercase;letter-spacing:.18em;color:#91b6d8;font-size:.72rem;font-weight:750}.brand p{margin:0}
+p{color:#a5b1bf;line-height:1.6}.status{padding:16px 20px;background:#19212b;border:1px solid #354253;border-left:3px solid #91b6d8;border-radius:14px;margin:20px 0}
+#connection{font-weight:700;color:#d3e0ec}#detail{margin-top:4px;color:#a5b1bf;font-size:.87rem}#error{color:#e0a0a6;min-height:1.5em}.cards{display:grid;grid-template-columns:minmax(0,1fr);gap:20px}
+input{font:inherit;padding:10px 12px;width:140px;border:1px solid #46566a;border-radius:9px;background:#11161d;color:#e4e9ef}input:focus-visible{outline:2px solid #9fc5e5;outline-offset:3px}input:disabled{opacity:.5}#altitudeError{color:#e0a0a6}.settings{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:20px 0}.settings label{font-weight:600;font-size:.9rem}
+article{background:#19212b;border:1px solid #354253;border-radius:20px;padding:24px;min-width:0;box-shadow:0 6px 24px #00000020}h2{font-size:.82rem;text-transform:uppercase;letter-spacing:.1em;color:#b7c7d6;margin:0 0 12px}
+.value{font-size:2.5rem;font-weight:650;letter-spacing:-.04em;font-variant-numeric:tabular-nums}.unit{font-size:1rem;color:#a5b1bf}canvas{width:100%;height:240px;display:block;margin-top:18px}#dewPoint{color:#a9c9e3}
+small{color:#94a3b4}footer{margin:24px 0;color:#94a3b4;font-size:.8rem;line-height:1.6}
+@media(max-width:540px){body{padding:20px 14px}.brand p{font-size:.8rem}article{padding:18px}}
+.pickup-banner{padding:16px 20px;border:1px solid #46566a;border-radius:14px;margin:16px 0;font-weight:650}.pickup-banner.active{background:#30222b;border-color:#bd7f89;color:#e4e9ef}.pickup-settings{margin:20px 0;padding:18px;border:1px solid #354253;border-radius:14px;background:#19212b}.pickup-settings summary{cursor:pointer;font-weight:650}.pickup-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin:20px 0}.pickup-fields label{display:flex;flex-direction:column;gap:7px;font-size:.85rem}.pickup-fields input{width:100%}.pickup-settings button{font:inherit;padding:10px 14px;border:1px solid #46566a;border-radius:8px;background:#253344;color:#e4e9ef;cursor:pointer;margin:4px}.pickup-settings button:disabled{opacity:.5;cursor:wait}
 </style>
-<header class="brand"><img class="fox-mark" src="/fox.png" alt="Pixel-art fox mascot" width="116" height="116"><div><div class="eyebrow">Fox den · Live environment</div><h1>Environmental monitor</h1><p>ESP32 + BME280 · BME280 5 readings/s · one-second reports</p></div></header>
+<header class="brand"><div class="eyebrow">Live sensor readings</div><h1>Environmental monitor</h1><p>ESP32 + BME280 · BME280 5 readings/s · one-second reports</p></header>
 <div class="status" role="status" aria-live="polite"><div id="connection">Connecting to ESP32…</div><div id="detail">Waiting for sensor data</div><div id="error"></div></div>
 <div id="pickupStatus" class="pickup-banner" role="status" aria-live="polite">Pickup detector: waiting for sensor data</div>
 <p><a href="/pickup">Open pickup tuning lab: threshold plots, settings and CSV export →</a></p>
@@ -32,14 +34,14 @@ small{color:#cbaaaa}footer{margin:24px 0;color:#cbaaaa;font-size:.8rem;line-heig
 <article><h2>Temperature</h2><span class="value" id="temperature">—</span> <span class="unit">°C</span><canvas id="tempChart" role="img" aria-label="Temperature in degrees Celsius over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
 <article><h2>Relative humidity</h2><span class="value" id="humidity">—</span> <span class="unit">%</span><canvas id="humChart" role="img" aria-label="Relative humidity in percent over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
 <article><h2>Estimated sea-level pressure</h2><span class="value" id="pressure">—</span> <span class="unit">hPa</span><canvas id="pressureChart" role="img" aria-label="Sea-level pressure over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
-<article><h2>MPU6050 acceleration</h2><p id="motionValues">Waiting for motion sensor</p><p><strong>Gyroscope</strong><br><span id="gyroValues">Waiting for motion sensor</span><br><small>One-second mean · saved zero-rate bias corrected · deg/s</small></p><button id="gyroCalibrate" type="button">Calibrate gyro (keep stationary)</button><p id="motionError" role="status"></p><button id="motionCalibrate" type="button" style="padding:10px 14px;border:1px solid #94606a;border-radius:9px;background:#48232d;color:#fff2e5;font:inherit;cursor:pointer">Calibrate flat (Z up)</button><p id="motionCalibrationStatus" role="status">Calibration removes fixed bias; gravity is retained.</p><small><span style="color:#ffb47f">X</span> · <span style="color:#e7b5ca">Y</span> · <span style="color:#e9d899">Z</span> · m/s², includes gravity · one-second means · 100 Hz acquisition target</small><canvas id="motionChart" role="img" aria-label="MPU6050 X Y Z acceleration in meters per second squared"></canvas><small>Time relative to now (seconds)</small></article>
+<article><h2>MPU6050 acceleration</h2><p id="motionValues">Waiting for motion sensor</p><p><strong>Gyroscope</strong><br><span id="gyroValues">Waiting for motion sensor</span><br><small>One-second mean · saved zero-rate bias corrected · deg/s</small></p><button id="gyroCalibrate" type="button">Calibrate gyro (keep stationary)</button><p id="motionError" role="status"></p><button id="motionCalibrate" type="button" style="padding:10px 14px;border:1px solid #46566a;border-radius:9px;background:#253344;color:#e4e9ef;font:inherit;cursor:pointer">Calibrate flat (Z up)</button><p id="motionCalibrationStatus" role="status">Calibration removes fixed bias; gravity is retained.</p><small><span style="color:#8db4d6">X</span> · <span style="color:#86b8ad">Y</span> · <span style="color:#c9b789">Z</span> · m/s², includes gravity · one-second means · 100 Hz acquisition target</small><canvas id="motionChart" role="img" aria-label="MPU6050 X Y Z acceleration in meters per second squared"></canvas><small>Time relative to now (seconds)</small></article>
 </main>
-<footer>Up to 600 seconds of history; shorter histories fill the graph width. Gaps indicate unavailable reports. Altitude adjusts the pressure estimate in this tab; reload restores the configured altitude. No internet services required.</footer>
+<footer>Environmental history: latest 30 seconds at 1 Hz; older data averaged into 30-second buckets, up to 600 seconds. The newest older bucket may be partial. Faint lines retain minima/maxima. Shorter histories fill the graph width; gaps indicate unavailable reports. Motion keeps its own one-second history. Altitude adjusts pressure in this tab; reload restores the configured altitude. No internet services required.</footer>
 <script>
 'use strict';
 const history=[],motionHistory=[];
 let lastMotionSequence=null;
-const charts=[['tempChart','t','#ffb47f','°C'],['humChart','h','#e7b5ca','%'],['pressureChart','p','#e9d899','hPa'],['motionChart','a','#ffb47f','m/s²']];
+const charts=[['tempChart','t','#8db4d6','°C'],['humChart','h','#86b8ad','%'],['pressureChart','p','#c9b789','hPa'],['motionChart','a','#8db4d6','m/s²']];
 let lastSequence=null,lastUptime=null,lastSuccess=0;
 let altitudeM=0,altitudeInitialized=false,currentReading=null;
 const $=id=>document.getElementById(id);
@@ -98,10 +100,10 @@ function draw(onlyMotion=false){
   const values=points.flatMap(p=>channelValues(p,key)); // Include extrema in vertical scaling.
   let lo=values.length?Math.min(...values):0,hi=values.length?Math.max(...values):1;
   const margin=Math.max((hi-lo)*.15,key==='p'?.5:.2);lo-=margin;hi+=margin;
-  ctx.font='11px system-ui';ctx.fillStyle='#d6b9b8';ctx.fillText(unit,left,13);
+  ctx.font='11px system-ui';ctx.fillStyle='#a5b1bf';ctx.fillText(unit,left,13);
   for(let i=0;i<=4;i++){
    const y=top+(bottom-top)*i/4;
-   ctx.strokeStyle='#62424d';ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();
+   ctx.strokeStyle='#344253';ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();
    ctx.fillText((hi-(hi-lo)*i/4).toFixed(1),2,y+4);
   }
   for(const fraction of [0,0.5,1]){
@@ -112,19 +114,19 @@ function draw(onlyMotion=false){
   // Render min and max first, each at exactly 30% opacity, then the mean.
   for(const index of [1,2,0]){
    ctx.globalAlpha=key==='a'?1:index===0?1:0.3;ctx.lineWidth=index===0||key==='a'?2:1.5;
-   ctx.strokeStyle=key==='a'?['#ffb47f','#e7b5ca','#e9d899'][index]:color;
+   ctx.strokeStyle=key==='a'?['#8db4d6','#86b8ad','#c9b789'][index]:color;
    ctx.beginPath();let previous=null;
    for(const point of records){
     if(!point[key]||!Number.isFinite(point[key][index])){previous=null;continue;}
     const x=left+(point.at-start)/span*(right-left),y=bottom-(channelValues(point,key)[index]-lo)/(hi-lo)*(bottom-top);
     // Sequence continuity, not browser-poll timing, determines real gaps.
-    if(!previous||point.sequence!==previous.sequence+1)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+    if(!previous||(point.firstSequence??point.sequence)!==previous.sequence+1)ctx.moveTo(x,y);else ctx.lineTo(x,y);
     previous=point;
    }
    ctx.stroke();
   }
   ctx.globalAlpha=1;
-  if(!points.length){ctx.fillStyle='#d6b9b8';ctx.fillText('Waiting for valid samples',left+6,(top+bottom)/2);}
+  if(!points.length){ctx.fillStyle='#a5b1bf';ctx.fillText('Waiting for valid samples',left+6,(top+bottom)/2);}
  }
 }
 /* Fetch incremental reports and backfill missed polls, without overlapping HTTP requests. */
@@ -146,15 +148,27 @@ async function poll(){
   if(lastUptime!==null && (data.uptime_ms<lastUptime||data.sequence<lastSequence)){history.length=0;lastSequence=null;}
   lastUptime=data.uptime_ms;
   if(!Array.isArray(data.history))throw new Error('Missing aggregate history; refresh after firmware update');
+  const cursor=lastSequence??0;
   for(const point of data.history){
-   if(point.sequence<=lastSequence)continue; // Repeated API polls must not duplicate reports.
+   const coarse=point.resolution_ms===30000,first=point.first_sequence??point.sequence;
+   const revision=point.revision??point.sequence;
+   if(!coarse&&point.sequence<=cursor)continue;
+   const existing=coarse?history.find(p=>p.resolution===30000&&p.firstSequence===first):null;
+   if(existing&&existing.revision>=revision)continue;
    const channels=[point.temperature_c,point.humidity_pct,point.pressure_hpa];
-   const ok=point.ok&&point.sample_count===5&&channels.every(c=>Array.isArray(c)&&c.length===3&&c.every(Number.isFinite));
+   const reports=point.report_count??1;
+   const ok=point.ok&&reports>0&&point.sample_count===reports*5&&channels.every(c=>Array.isArray(c)&&c.length===3&&c.every(Number.isFinite));
+   // A revised coarse bucket replaces its previous version AND the fine points it summarizes.
+   if(coarse)for(let i=history.length-1;i>=0;--i){
+    const p=history[i];if(p.sequence>=first&&(p.firstSequence??p.sequence)<=point.sequence)history.splice(i,1);
+   }
    // Translate device-relative age into the browser's monotonic clock domain.
-   history.push({sequence:point.sequence,at:now-Math.min(point.age_ms,600000),
+   history.push({firstSequence:first,sequence:point.sequence,revision,resolution:coarse?30000:1000,at:now-Math.min(point.age_ms,600000),
                  t:ok?point.temperature_c:null,h:ok?point.humidity_pct:null,p:ok?point.pressure_hpa:null});
-   lastSequence=point.sequence;
+   lastSequence=Math.max(lastSequence??0,point.sequence);
   }
+  history.sort((a,b)=>a.firstSequence-b.firstSequence);
+  if(data.history_mode==='tiered_30s')lastSequence=Math.max(lastSequence??0,data.sequence);
   const valid=data.sensor_ok&&[data.temperature_c,data.humidity_pct,data.pressure_hpa].every(Number.isFinite);
   $('connection').textContent=data.wifi_connected?'Connected to ESP32':'ESP32 Wi-Fi disconnected';
   $('error').textContent=valid?'':('Sensor: '+(data.error||'Waiting for a complete one-second window'));

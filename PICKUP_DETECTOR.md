@@ -172,26 +172,21 @@ was retained; no automatic flat-pose recalibration was performed.
 
 Open **http://<device-IP>/pickup** (currently http://192.168.50.83/pickup), or
 follow the main dashboard's tuning link. This separate, self-contained page
-includes the same persistent settings API plus 13 debug plot groups:
+includes the same persistent settings API plus six debug plot groups:
 
 1. Acceleration departure, fixed trigger, adaptive noise trigger and effective max.
-2. Noise-normalized departure, noise multiplier and effective required ratio.
-3. Tilt angle and trigger threshold.
-4. Filtered rotation rate and trigger threshold.
-5. Stationary acceleration RMS and quiet threshold.
-6. Instantaneous rotation, quiet-window gyro RMS and stationary rotation limit.
-7. Accumulated quiet duration and required stationary duration.
-8. Continuous trigger evidence and required persistence.
-9. Raw/filtered acceleration magnitudes and frozen resting reference.
-10. Peak sample-delivery gap, current sample age, allowed gap and filter time constant.
-11. Pickup/armed/commanded-LED state.
-12. Observed commanded blink period versus configured period.
-13. Observed commanded duty cycle versus configured duty cycle.
+2. Tilt angle and trigger threshold.
+3. Filtered rotation rate and trigger threshold.
+4. Instantaneous rotation, quiet-window gyro RMS and stationary rotation limit.
+5. Accumulated quiet duration and required stationary duration.
+6. Continuous trigger evidence and required persistence.
 
-Smoothing is a filter coefficient rather than a direct trigger: compare raw and
-filtered traces in plot 9 while its configured time constant is plotted in 10.
-LED observations refer to firmware-command transitions, not an electrical pin
-measurement. They are unavailable until a complete active blink cycle is seen.
+The tuning form hides `led_duty_pct`, `led_period_ms`, `max_gap_ms`,
+`smoothing_ms`, `stationary_accel_rms`, and `noise_multiplier`. Normal saves
+resubmit their saved values as part of the complete validated settings payload;
+hidden inputs are never read or replaced with empty/default values. Restore
+defaults intentionally resets every parameter, including hidden ones. Detector
+logic, LED behavior, debug API and CSV telemetry remain available as before.
 If the stationary gyro gate skips RMS evaluation, RMS plots show a gap rather
 than an obsolete value; instantaneous rotation explains the rejection.
 Reference-dependent features are unavailable until a baseline is learned.

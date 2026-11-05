@@ -8,8 +8,8 @@
 #include <new>
 #include "config.h"
 #include "dashboard.h"
-#include "fox_image.h"
 #include "aggregation.h"
+#include "environment_history.h"
 #include "pickup_io.h"
 #include "pickup_tuning.h"
 #include "motion.h"
@@ -34,11 +34,8 @@ static_assert(DEFAULT_ALTITUDE_M >= -500 && DEFAULT_ALTITUDE_M <= 9000,
               "Set DEFAULT_ALTITUDE_M between -500 and 9000 meters");
 SampleWindow window;
 PublishedSample latest;
-constexpr unsigned MAX_HISTORY_SIZE = 602;
-unsigned HISTORY_SIZE = 1;
-PublishedSample historyFallback;
-PublishedSample *publishedHistory = &historyFallback;
-unsigned historyHead = 0, historyCount = 0;
+EnvironmentHistory environmentHistory;
+bool environmentHistoryTestsPassed=false;
 bool windowFailed = false;
 const char *sensorError = "Sensor not initialized";
 
@@ -167,8 +164,9 @@ void acquireSensor() {
  */
 void publishWindow(uint32_t now) {
   if (now - windowStart < PUBLISH_INTERVAL_MS) return;
+  const uint32_t sequence=latest.sequence+1;
   latest = PublishedSample{};
-  latest.sequence = historyCount ? publishedHistory[(historyHead + HISTORY_SIZE - 1) % HISTORY_SIZE].sequence + 1 : 1;
+  latest.sequence = sequence;
   latest.sampleMs = now;
   latest.count = window.count;
   // Reject missing readings, any recorded error, and excessively delayed windows.
@@ -178,10 +176,7 @@ void publishWindow(uint32_t now) {
   latest.temperature.finish(window.temperature, window.count);
   latest.humidity.finish(window.humidity, window.count);
   latest.pressure.finish(window.pressure, window.count);
-  // Overwrite the oldest ring-buffer entry instead of allocating growing history.
-  publishedHistory[historyHead] = latest;
-  historyHead = (historyHead + 1) % HISTORY_SIZE;
-  if (historyCount < HISTORY_SIZE) ++historyCount;
+  environmentHistory.add(latest); // Recent one-second reports age into 30-second buckets.
   // A disconnected report must not advertise an obsolete address as usable.
   const wl_status_t wifiStatus = WiFi.status();
   const bool wifiConnected = wifiStatus == WL_CONNECTED;
@@ -230,9 +225,11 @@ void sendReadings() {
   uint32_t since = server.hasArg("since") ? strtoul(server.arg("since").c_str(), nullptr, 10) : 0;
   if (since > latest.sequence) since = 0; // Device restarted.
   String json;
-  json.reserve(16000); // Reduce heap reallocations when backfilling ten minutes.
+  json.reserve(2400+environmentHistory.selected(since,now)*240); // Most live responses contain just two changed rows.
   json = "{\"sequence\":" + String(latest.sequence);
   json += ",\"uptime_ms\":" + String(now);
+  json += ",\"history_mode\":\"tiered_30s\",\"history_recent_ms\":30000,\"history_coarse_ms\":30000";
+  json += ",\"history_self_tests_passed\":"+String(environmentHistoryTestsPassed?"true":"false");
   json += ",\"default_altitude_m\":" + String(DEFAULT_ALTITUDE_M, 2);
   json += ",\"sample_ms\":" + String(latest.sampleMs);
   json += ",\"sample_age_ms\":" + (latest.sequence ? String(age) : String("null"));
@@ -248,22 +245,20 @@ void sendReadings() {
   appendMotion(json, now);
   json += ",\"history\":[";
   bool first = true;
-  unsigned sent = 0; // Bound history backfill so a long response does not starve FIFO servicing.
-  // Traverse oldest to newest so the browser can append reports in sequence.
-  for (unsigned i = 0; i < historyCount && sent < 60; ++i) {
-    const PublishedSample &point = publishedHistory[(historyHead + HISTORY_SIZE - historyCount + i) % HISTORY_SIZE];
-    if (point.sequence <= since || now - point.sampleMs > 600000) continue; // Limit to requested, recent reports.
+  // Updated coarse rows bypass the source-sequence cursor through their promotion revision.
+  environmentHistory.visit(since,now,[&](const EnvironmentHistory::Point &point,bool coarse){
     if (!first) json += ',';
     first = false;
-    ++sent;
-    json += "{\"sequence\":" + String(point.sequence) + ",\"age_ms\":" + String(now - point.sampleMs);
-    json += ",\"sample_count\":" + String(point.count) + ",\"ok\":";
+    json += "{\"first_sequence\":"+String(point.firstSequence)+",\"sequence\":" + String(point.sequence);
+    json += ",\"age_ms\":" + String(now-point.midpoint())+",\"revision\":"+String(point.revision);
+    json += ",\"resolution_ms\":"+String(coarse?30000:1000)+",\"report_count\":"+String(point.reports);
+    json += ",\"sample_count\":" + String(point.samples) + ",\"ok\":";
     json += point.ok ? "true" : "false";
     json += ",\"temperature_c\":"; appendChannel(json, point.temperature, point.ok);
     json += ",\"humidity_pct\":"; appendChannel(json, point.humidity, point.ok);
     json += ",\"pressure_hpa\":"; appendChannel(json, point.pressure, point.ok);
     json += '}';
-  }
+  });
   json += "]}";
   // Live API responses must not be replaced by a browser's cached reading.
   server.sendHeader("Cache-Control", "no-store");
@@ -278,6 +273,8 @@ void sendReadings() {
 void setup() {
   Serial.begin(115200);
   Serial.println("\nESP32 BME280: 5 Hz acquisition, 1 s mean/min/max, SDA=21 SCL=22");
+  environmentHistoryTestsPassed=runEnvironmentHistorySelfTests(environmentHistory);
+  Serial.printf("[history] Tiered history self-tests: %s; storage=%u bytes\n",environmentHistoryTestsPassed?"PASS":"FAIL",unsigned(sizeof(environmentHistory)));
   setupPickup(); // Tests, persistent settings and exclusive LED ownership.
   Serial.printf("[events] Journal self-tests: %s\n",runPickupEventSelfTests()?"PASS":"FAIL");
   pickupEvents.begin(); // Restore the last ten events before acquisition starts.
@@ -378,7 +375,7 @@ void setup() {
   server.on("/api/pickup/status", HTTP_GET, sendPickupStatus);
   server.on("/api/pickup/events",HTTP_GET,[](){
     String json="{\"ble_ready\":"+String(pickupBleReady?"true":"false")+",\"free_heap\":"+String(ESP.getFreeHeap())+
-      ",\"largest_free_block\":"+String(ESP.getMaxAllocHeap())+",\"history_capacity\":"+String(HISTORY_SIZE)+
+      ",\"largest_free_block\":"+String(ESP.getMaxAllocHeap())+",\"history_capacity\":"+String(EnvironmentHistory::MAX_POINTS)+
       ",\"metadata\":"+pickupEvents.metadataJson()+",\"events\":[";
     for(unsigned i=0;i<10;++i){if(i)json+=',';json+=pickupEvents.eventJson(i);}json+="]}";
     server.sendHeader("Cache-Control","no-store");server.send(200,"application/json",json);
@@ -392,11 +389,6 @@ void setup() {
   });
   server.on("/api/pickup/settings", HTTP_POST, updatePickupSettings);
   server.on("/api/pickup/defaults", HTTP_POST, restorePickupDefaults);
-  /* Serve the original binary PNG with an explicit length, including any zero bytes. */
-  server.on("/fox.png", HTTP_GET, []() {
-    server.sendHeader("Cache-Control", "public, max-age=3600");
-    server.send_P(200, "image/png", reinterpret_cast<const char *>(FOX_PNG), sizeof(FOX_PNG));
-  });
   /* Return an actual missing-resource status instead of misleading dashboard content. */
   server.onNotFound([]() { server.send(404, "text/plain", "Not found"); });
   windowStart = millis();
@@ -408,15 +400,7 @@ void startOptionalServices(){
   Serial.printf("[memory] Before BLE: free=%u largest=%u\n",ESP.getFreeHeap(),ESP.getMaxAllocHeap());
   if(ESP.getFreeHeap()>=81920&&ESP.getMaxAllocHeap()>=32768)setupPickupBle();
   else Serial.println("[ble] Skipped: need 80 KiB free / 32 KiB contiguous; see [memory] diagnostic");
-  // History is optional: keep 64 KiB available for HTTP/debug/OTA and phone connections.
-  const size_t free=ESP.getFreeHeap(),largest=ESP.getMaxAllocHeap();
-  const unsigned affordable=free>65536?(free-65536)/sizeof(PublishedSample):0;
-  const unsigned contiguous=largest>1024?(largest-1024)/sizeof(PublishedSample):0;
-  const unsigned capacity=min(MAX_HISTORY_SIZE,min(affordable,contiguous));
-  if(capacity>=2){
-    if(auto *history=new(std::nothrow) PublishedSample[capacity]){publishedHistory=history;HISTORY_SIZE=capacity;}
-  }
-  Serial.printf("[history] Environmental backfill capacity: %u reports; browser retains 600 s\n",HISTORY_SIZE);
+  Serial.printf("[history] Last 30 s at 1 Hz; older data in 30 s buckets, max %u points\n",EnvironmentHistory::MAX_POINTS);
   Serial.printf("[memory] Radios/routes/history: free=%u largest=%u minimum=%u\n",ESP.getFreeHeap(),ESP.getMaxAllocHeap(),ESP.getMinFreeHeap());
   radioServicesReady=true;
 }

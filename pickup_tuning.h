@@ -5,37 +5,32 @@ const char PICKUP_TUNING_HTML[] PROGMEM=R"TUNING(
 <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Pickup detector · Tuning lab</title>
 <style>
-:root{color-scheme:dark;font:15px system-ui,sans-serif;background:#21151d;color:#fff2e5}*{box-sizing:border-box}body{max-width:1120px;margin:auto;padding:26px 20px}a{color:#ffb47f}h1{font-size:2rem;letter-spacing:-.03em;margin:10px 0}h2{font-size:1rem;margin:0 0 8px}p,small{color:#d6b9b8;line-height:1.6}.panel,article,details{background:#30212a;border:1px solid #69414a;border-radius:15px;padding:18px;margin:16px 0}.active{background:#6b263c;border-color:#ffb47f}summary{cursor:pointer;font-weight:700}button,input,select{font:inherit;padding:9px 12px;border:1px solid #94606a;border-radius:8px;background:#21151d;color:#fff2e5}button{cursor:pointer}button:disabled{opacity:.5;cursor:wait}.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}.settings{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin:18px 0}label{display:flex;flex-direction:column;gap:6px;font-size:.88rem}input{width:100%}canvas{width:100%;height:220px;display:block}.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:.82rem;margin:10px 0}.legend span{display:inline-flex;gap:6px;align-items:center}.swatch{width:18px;height:3px;display:inline-block}#error,#saveStatus{color:#ffbdad}.nav{display:flex;flex-wrap:wrap;gap:16px;margin-top:18px}.legend em{font-style:normal;color:#cbaaaa}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #ffb47f;outline-offset:2px}footer{font-size:.8rem;color:#cbaaaa;margin:24px 0}
+:root{color-scheme:dark;font:15px system-ui,sans-serif;background:#11161d;color:#e4e9ef}*{box-sizing:border-box}body{max-width:1120px;margin:auto;padding:26px 20px}a{color:#8db4d6}h1{font-size:2rem;letter-spacing:-.03em;margin:10px 0}h2{font-size:1rem;margin:0 0 8px}p,small{color:#a5b1bf;line-height:1.6}.panel,article,details{background:#19212b;border:1px solid #354253;border-radius:15px;padding:18px;margin:16px 0}.active{background:#30222b;border-color:#bd7f89}summary{cursor:pointer;font-weight:700}button,input,select{font:inherit;padding:9px 12px;border:1px solid #46566a;border-radius:8px;background:#11161d;color:#e4e9ef}button{cursor:pointer}button:disabled{opacity:.5;cursor:wait}.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}.settings{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;margin:18px 0}label{display:flex;flex-direction:column;gap:6px;font-size:.88rem}input{width:100%}canvas{width:100%;height:220px;display:block}.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:.82rem;margin:10px 0}.legend span{display:inline-flex;gap:6px;align-items:center}.swatch{width:18px;height:3px;display:inline-block}#error,#saveStatus{color:#e0a0a6}.nav{display:flex;flex-wrap:wrap;gap:16px;margin-top:18px}.legend em{font-style:normal;color:#94a3b4}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #8db4d6;outline-offset:2px}footer{font-size:.8rem;color:#94a3b4;margin:24px 0}
 </style>
 <a href="/">← Environmental dashboard</a><h1>Pickup detector · Tuning lab</h1>
 <p>Watch the signals the detector actually compares. Solid lines are measurements; dashed lines are thresholds/settings. Telemetry is sampled at 20 Hz and fetched in batches at 5 Hz. Short state changes are captured immediately.</p>
 <div id="status" class="panel" role="status" aria-live="polite">Connecting…</div><div id="error" role="status"></div>
-<details open><summary>Persistent detection settings</summary><p>Save applies validated settings and restarts baseline learning. Active alerts remain until stillness is confirmed. Defaults and runtime edits are saved on the ESP32.</p><form id="settingsForm"><div id="fields" class="settings"></div><div class="controls"><button id="save" type="submit" disabled>Save settings</button><button id="defaults" type="button" disabled>Restore defaults</button><button id="reload" type="button">Reload saved settings</button></div><p id="saveStatus" role="status">Loading settings…</p></form></details>
+<details open><summary>Persistent detection settings</summary><p>Save applies validated settings and restarts baseline learning. Active alerts remain until stillness is confirmed. Save preserves hidden parameters; Restore defaults resets all parameters. Changes are saved on the ESP32.</p><form id="settingsForm"><div id="fields" class="settings"></div><div class="controls"><button id="save" type="submit" disabled>Save settings</button><button id="defaults" type="button" disabled>Restore defaults</button><button id="reload" type="button">Reload saved settings</button></div><p id="saveStatus" role="status">Loading settings…</p></form></details>
 <div class="controls"><label>History window<select id="window"><option value="15">15 seconds</option><option value="30">30 seconds</option><option value="60" selected>60 seconds</option><option value="120">120 seconds</option><option value="600">600 seconds</option></select></label><button id="pause">Pause capture</button><button id="clear">Clear plots</button><button id="export">Export CSV</button><span id="captureInfo"></span></div>
-<nav class="nav"><a href="#movement">Movement triggers</a><a href="#stillness">Stillness / clearing</a><a href="#timing">Filtering / timing</a><a href="#led">LED</a></nav>
+<nav class="nav"><a href="#movement">Movement triggers</a><a href="#quiet-gyro">Stillness / clearing</a><a href="#persistence">Trigger persistence</a></nav>
 <div id="charts"></div>
 <div class="panel"><h2>Recent detector events</h2><div id="eventLog">Waiting for events.</div></div>
-<footer>Plots show processing-time samples, not an oscilloscope trace. Nulls and missing records appear as gaps. RMS is unavailable when rotation rejects the quiet window before RMS evaluation; use instantaneous rotation to see why. LED traces describe commanded output observed by firmware, not an electrical measurement. While paused/closed, telemetry capture stops after a short lease. Historical thresholds are preserved when settings change. Pickup classification and LED ownership are unchanged.</footer>
+<footer>Plots show processing-time samples, not an oscilloscope trace. Nulls and missing records appear as gaps. RMS is unavailable when rotation rejects the quiet window before RMS evaluation; use instantaneous rotation to see why. While paused/closed, telemetry capture stops after a short lease. Historical thresholds are preserved when settings change. Pickup classification and LED ownership are unchanged.</footer>
 <script>
 'use strict';
 const $=id=>document.getElementById(id);
-const colors=['#ffb47f','#e7b5ca','#e9d899','#8bd0c4','#c2b2ef'];
+const colors=['#8db4d6','#86b8ad','#c9b789','#79b5a3','#a6a2c9'];
 // Each trace maps to an actual firmware measurement or a threshold snapshot in the same row.
 const plotSpecs=[
  {id:'movement',title:'Acceleration departure',unit:'m/s²',traces:[['Deviation','accel_deviation',0],['Fixed trigger','accel_trigger',1,1],['Noise × multiplier','adaptive_accel',3,1],['Effective trigger (max)','effective_accel',2,1]]},
- {id:'noise',title:'Adaptive noise threshold',unit:'× baseline RMS',note:'The fixed acceleration floor can dominate the noise multiplier. Zero/unknown baseline noise is unavailable.',traces:[['Deviation / noise','noise_ratio',0],['Noise multiplier','noise_multiplier',1,1],['Effective required ratio','required_ratio',2,1]]},
  {id:'tilt',title:'Tilt from armed baseline',unit:'degrees',traces:[['Tilt','tilt_deg',0],['Trigger','tilt_limit',2,1]]},
  {id:'rotation',title:'Rotation trigger',unit:'deg/s',traces:[['Filtered gyro magnitude','gyro_deg_s',0],['Trigger','gyro_trigger_deg_s',2,1]]},
- {id:'stillness',title:'Stationary acceleration variation',unit:'m/s² RMS',traces:[['Window RMS','accel_rms',0],['Stationary limit','stationary_accel_rms',2,1]]},
  {id:'quiet-gyro',title:'Stationary rotation',unit:'deg/s',traces:[['Instantaneous magnitude','instant_gyro_deg_s',0],['Window RMS','gyro_rms_deg_s',1],['Stationary limit','stationary_gyro_deg_s',2,1]]},
  {id:'quiet-time',title:'Continuous quiet evidence / automatic clearing',unit:'ms',traces:[['Quiet window accumulated','quiet_ms',0],['Required stationary duration','stationary_ms',2,1]]},
- {id:'persistence',title:'Trigger persistence',unit:'ms',traces:[['Continuous trigger evidence','evidence_ms',0],['Required duration','trigger_ms',2,1]]},
- {id:'timing',title:'Filter response',unit:'m/s²',note:'Raw vs low-pass magnitude. Filter time constant is shown in the next timing plot.',traces:[['Raw magnitude','raw_accel',1],['Filtered magnitude','filtered_accel',0],['Resting reference','rest_accel',2,1]]},
- {id:'gap',title:'Timing budget and filter time constant',unit:'ms',traces:[['Peak delivery gap since capture','delivery_gap_ms',0],['Sample age','sample_age_ms',1],['Maximum allowed gap','max_gap_ms',2,1],['Filter time constant','smoothing_ms',3,1]]},
- {id:'led',title:'Detector and LED state',unit:'0 / 1',traces:[['Pickup active','active',0],['Armed','armed',3],['LED ON command','led_on',2]]},
- {id:'led-period',title:'LED blink period',unit:'ms',note:'Observed timing is available only after a complete blink cycle while alerting.',traces:[['Observed command period','observed_led_period_ms',0],['Configured period','led_period_ms',2,1]]},
- {id:'led-duty',title:'LED duty cycle',unit:'%',traces:[['Observed command duty','observed_led_duty_pct',0],['Configured duty','led_duty_pct',2,1]]}
+ {id:'persistence',title:'Trigger persistence',unit:'ms',traces:[['Continuous trigger evidence','evidence_ms',0],['Required duration','trigger_ms',2,1]]}
 ];
+// Hidden fields remain in the validated settings payload, preserving saved detector configuration.
+const hiddenSettings=new Set(['led_duty_pct','led_period_ms','max_gap_ms','smoothing_ms','stationary_accel_rms','noise_multiplier']);
 const gyroUnitMap={gyro_rad_s:'gyro_deg_s',gyro_trigger:'gyro_trigger_deg_s',instant_gyro:'instant_gyro_deg_s',gyro_rms:'gyro_rms_deg_s',stationary_gyro:'stationary_gyro_deg_s'};
 const triggerNames=['acceleration departure','tilt','filtered rotation'];
 const quietNames=['acceleration RMS','instantaneous rotation','gyro RMS'];
@@ -45,9 +40,9 @@ function maskNames(mask,names){return names.filter((_,i)=>(mask||0)&(1<<i)).join
 function annotate(point,previous){
  point.markers=[];
  const consecutive=previous&&point.sequence===previous.sequence+1;
- if(consecutive&&point.events>previous.events)point.markers.push({kind:'trigger',color:'#ff657d',label:'Alert confirmed: '+maskNames(point.confirmed_trigger_mask,triggerNames),mask:point.confirmed_trigger_mask});
- if(consecutive&&previous.active&&!point.active&&point.valid&&point.armed&&point.settings_revision===previous.settings_revision)point.markers.push({kind:'clear',color:'#8bd0c4',label:'Alert cleared: full stationary window'});
- if(point.valid&&point.quiet_block_mask&&(!consecutive||point.quiet_block_mask!==previous.quiet_block_mask||point.active!==previous.active))point.markers.push({kind:'block',color:'#e9d899',label:'Quiet timer reset: '+maskNames(point.quiet_block_mask,quietNames),mask:point.quiet_block_mask});
+ if(consecutive&&point.events>previous.events)point.markers.push({kind:'trigger',color:'#df8a96',label:'Alert confirmed: '+maskNames(point.confirmed_trigger_mask,triggerNames),mask:point.confirmed_trigger_mask});
+ if(consecutive&&previous.active&&!point.active&&point.valid&&point.armed&&point.settings_revision===previous.settings_revision)point.markers.push({kind:'clear',color:'#79b5a3',label:'Alert cleared: full stationary window'});
+ if(point.valid&&point.quiet_block_mask&&(!consecutive||point.quiet_block_mask!==previous.quiet_block_mask||point.active!==previous.active))point.markers.push({kind:'block',color:'#c9b789',label:'Quiet timer reset: '+maskNames(point.quiet_block_mask,quietNames),mask:point.quiet_block_mask});
 }
 /* Each plot identifies its decision role; unrelated timing/LED settings never trigger pickup. */
 function decisionNote(id){
@@ -80,8 +75,8 @@ function renderSettings(data){
  for(const f of data.fields)if(!/^[a-z_]+$/.test(f.key)||![f.value,f.min,f.max,f.step].every(Number.isFinite))throw new Error('Invalid setting metadata');
  fields=data.fields;
  settingsRevision=data.settings_revision??settingsRevision;
- $('fields').innerHTML=fields.map(f=>'<label for="setting-'+f.key+'">'+esc(f.label)+' ('+esc(f.display_unit||f.unit)+')<input id="setting-'+f.key+'" name="'+f.key+'" type="number" min="'+f.min*(f.display_scale||1)+'" max="'+f.max*(f.display_scale||1)+'" step="'+((f.display_scale||1)===1?f.step:'any')+'" required><small>Default '+esc(f.default*(f.display_scale||1))+'</small></label>').join('');
- for(const f of fields)$('setting-'+f.key).value=String(f.value*(f.display_scale||1));
+ $('fields').innerHTML=fields.filter(f=>!hiddenSettings.has(f.key)).map(f=>'<label for="setting-'+f.key+'">'+esc(f.label)+' ('+esc(f.display_unit||f.unit)+')<input id="setting-'+f.key+'" name="'+f.key+'" type="number" min="'+f.min*(f.display_scale||1)+'" max="'+f.max*(f.display_scale||1)+'" step="'+((f.display_scale||1)===1?f.step:'any')+'" required><small>Default '+esc(f.default*(f.display_scale||1))+'</small></label>').join('');
+ for(const f of fields)if(!hiddenSettings.has(f.key))$('setting-'+f.key).value=String(f.value*(f.display_scale||1));
  dirty=false;$('save').disabled=false;$('defaults').disabled=false;
  $('saveStatus').textContent=data.persisted?'Saved settings loaded.':'Code defaults loaded; Save persists settings.';
 }
@@ -96,7 +91,10 @@ $('settingsForm').addEventListener('submit',async event=>{
  event.preventDefault();$('save').disabled=true;$('defaults').disabled=true;
  try{
   const body=new URLSearchParams();
-  for(const f of fields){const text=$('setting-'+f.key).value.trim(),v=Number(text)/(f.display_scale||1);if(!text||!Number.isFinite(v)||v<f.min||v>f.max)throw new Error('Check '+f.label);body.set(f.key,String(v));}
+  for(const f of fields){
+   if(hiddenSettings.has(f.key)){body.set(f.key,String(f.value));continue;}
+   const text=$('setting-'+f.key).value.trim(),v=Number(text)/(f.display_scale||1);if(!text||!Number.isFinite(v)||v<f.min||v>f.max)throw new Error('Check '+f.label);body.set(f.key,String(v));
+  }
   await loadSettings({method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()});
   $('saveStatus').textContent='Saved on ESP32. Baseline learning restarted; an active alert is retained until stillness.';
  }catch(error){$('saveStatus').textContent='Not saved: '+error.message;}
@@ -148,8 +146,8 @@ function draw(){
   const values=visible.flatMap(row=>p.traces.map(t=>row[t[1]])).filter(Number.isFinite);
   let lo=values.length?(p.id==='timing'?Math.min(...values):Math.min(0,...values)):0,hi=values.length?Math.max(...values):1;
   const pad=Math.max((hi-lo)*.08,.01);lo-=pad;hi+=pad;
-  c.font='11px system-ui';c.fillStyle='#d6b9b8';c.textAlign='left';c.fillText(p.unit,left,13);
-  for(let i=0;i<=4;i++){const y=top+(bottom-top)*i/4;c.strokeStyle='#62424d';c.setLineDash([]);c.beginPath();c.moveTo(left,y);c.lineTo(right,y);c.stroke();c.fillText((hi-(hi-lo)*i/4).toFixed(hi>100?0:3),2,y+4);}
+  c.font='11px system-ui';c.fillStyle='#a5b1bf';c.textAlign='left';c.fillText(p.unit,left,13);
+  for(let i=0;i<=4;i++){const y=top+(bottom-top)*i/4;c.strokeStyle='#344253';c.setLineDash([]);c.beginPath();c.moveTo(left,y);c.lineTo(right,y);c.stroke();c.fillText((hi-(hi-lo)*i/4).toFixed(hi>100?0:3),2,y+4);}
   for(const f of [0,.5,1]){c.textAlign=f===0?'left':f===1?'right':'center';c.fillText(((start+f*span-end)/1000).toFixed(1),left+f*(right-left),h-8);}
   for(const t of p.traces){
    c.strokeStyle=colors[t[2]];c.lineWidth=t[3]?1.5:2;c.setLineDash(t[3]?[6,4]:[]);c.beginPath();let previous=null;
@@ -170,7 +168,7 @@ function draw(){
   }
   canvas.title='Red CAUSE: this signal exceeded its limit at confirmation. Red ALERT*: another signal caused confirmation. Amber RESET: quiet evidence restarted. Green CLEAR: full quiet window completed. See recent events for exact causes and boot-relative timestamps.';
   $('legend-'+p.id).innerHTML=p.traces.map(t=>'<span><i class="swatch" style="background:'+colors[t[2]]+'"></i>'+esc(t[0])+': <em>'+((latest&&Number.isFinite(latest[t[1]]))?latest[t[1]].toFixed(3):'unavailable')+'</em></span>').join('');
-  if(!values.length){c.fillStyle='#d6b9b8';c.textAlign='left';c.fillText('Waiting for applicable telemetry',left+8,(top+bottom)/2);}
+  if(!values.length){c.fillStyle='#a5b1bf';c.textAlign='left';c.fillText('Waiting for applicable telemetry',left+8,(top+bottom)/2);}
  }
 }
 /* Poll in bounded batches, never overlapping requests. Pause capture releases the firmware lease. */

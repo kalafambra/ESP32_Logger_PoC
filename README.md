@@ -1,6 +1,6 @@
 ﻿# ESP32 environmental and motion monitor
 
-ESP32-WROOM Arduino firmware with an offline fox-themed dashboard, BME280,
+ESP32-WROOM Arduino firmware with an offline dark slate dashboard, BME280,
 MPU6050, serial diagnostics and password-protected ArduinoOTA.
 
 ## Current acquisition and publication rates
@@ -24,8 +24,10 @@ X/Y/Z as three colored lines; raw 100 Hz frames are not transmitted.
 - config.h: private Wi-Fi/OTA credentials, altitude and GPIO settings; ignored by Git.
 - config.example.h: shareable configuration with placeholder credentials.
 - dashboard.h: embedded HTML/CSS/JavaScript; no internet dependencies.
-- fox.png and fox_image.h: original image and generated flash-resident PNG data.
+- fox.png and fox_image.h: archived image assets, no longer embedded or served by the firmware.
 - scripts/embed_fox.py: regenerate the PNG header after replacing fox.png.
+- scripts/quantize_fox.py: 16-color conversion (Pillow), preserving source dimensions and alpha values.
+- environment_history.h: bounded one-second / 30-second environmental history and its self-tests.
 - scripts/upload_ota.py: authenticated uploader wrapper; reads password from config.h.
 - tests/dashboard.test.cjs: simulated DOM/canvas tests, run with Node.js.
 
@@ -137,15 +139,48 @@ serial and HTTP are synchronous, so rates remain best effort. Wire timeout is
 error-free timing. Sensor initialization failure requires repairing wiring and
 resetting; transient acquisition failures attempt recovery.
 
-BME history holds 602 reports (~10 minutes); API backfill is capped at 60 per
-request to bound heap/network work. Motion history holds 128 reports (~128 s)
+BME history keeps only the last 30 seconds of one-second reports. Older data
+uses time-aligned 30-second buckets across approximately ten minutes, with at
+most 51 graph points (including a partial older bucket). Means are weighted by
+source reading counts; minima/maxima retain the extrema across the bucket. Any
+invalid constituent report makes its bucket unavailable. Browser updates replace
+summarized fine points instead of retaining duplicate old data. The current
+partial bucket updates incrementally until complete. Motion history holds 128 reports (~128 s)
 and sends at most 20 per request. Incremental backfill repairs missed polls;
 sequences missing beyond the retained buffers produce graph gaps. Browser
 history is time-bounded to ten minutes. Reload can restore only device history.
 
+Environmental history metadata includes `first_sequence`, `sequence`, `revision`,
+`resolution_ms`, `report_count`, and `sample_count`. The `since` cursor is a live
+report revision: promotions resend changed older buckets, so a browser replaces
+their earlier versions and removes the fine reports they summarize. Buckets are
+aligned to 30-second device-uptime windows and plotted at their source-time
+midpoint. Startup/edge buckets can be partial; sensor-error buckets remain gaps.
+The fixed history uses 3,280 bytes. HTTP response reservation follows the number
+of selected rows, replacing the previous unconditional 16,000-byte reservation.
+
+The archived fox image uses a 4-bit indexed palette (16 entries, including transparency):
+4,304 bytes versus 48,676 previously, with unchanged 255 x 328 dimensions and
+unchanged per-pixel alpha. `scripts/quantize_fox.py` uses Pillow 13+ and preserves
+pixel-art edges without dithering; `--from-git` reads the committed image as its
+input. The generated `fox_image.h` matches `fox.png` (the script regenerates it).
+The dashboard now uses a text-only header and muted slate/blue styling; the fox
+include and `/fox.png` route have been removed, so no image bytes enter the firmware.
+
+Validation for this optimization: ESP32/no_fs build passed (1,428,944 application
+bytes / 70%; 77,268 static RAM bytes / 23%). The fixed history moved about 3.2 KB
+into static storage but replaced the much larger dynamically allocated history.
+Dashboard, tuning and BLE-definition tests passed; USB flashing/hashes verified.
+Startup history/detector/journal self-tests passed. A restart recovered a failed
+initial BME280 probe, followed by valid five-reading reports and BLE ready.
+Live comparison checked 36 bucket updates, including one complete 30-second
+bucket: weighted means agreed within 0.002 of rounded API inputs and extrema
+matched exactly. A subsequent snapshot showed 74,392 free heap bytes / 65,524
+bytes in the largest block. Heap values vary with clients and active debug capture.
+
 ## API and derived values
 
-- GET /: dashboard. GET /fox.png: original PNG served from flash.
+- GET /: dashboard. The former /fox.png resource is no longer served.
 - GET /api/readings?since=N: BME latest report and incremental BME history.
   sample_interval_ms=200, publish_interval_ms=1000, sample_count=5 for valid
   reports. Channels in history use [mean, minimum, maximum].
@@ -182,7 +217,7 @@ After upload and browser refresh, manually verify:
    Check with multiple tabs, network interruptions/backfill and OTA separately.
 5. LED stays OFF while armed and blinks 1 Hz/50% during a pickup alert; slow rotation changes the MPU axes, whose
    stationary magnitude is roughly 9.81 m/s^2. Acceleration includes gravity.
-6. Altitude/dew point, fox image, Wi-Fi recovery and offline LAN operation work.
+6. Altitude/dew point, dark dashboard styling, Wi-Fi recovery and offline LAN operation work.
 
 ## References
 

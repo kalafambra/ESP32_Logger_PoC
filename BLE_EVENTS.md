@@ -113,12 +113,11 @@ NVS writes; allocation failure leaves current settings/evidence unchanged.
 Shrinkage frees unused space when replacement allocation succeeds. Startup
 self-tests exercise ten-second growth and return to the default window.
 
-Environmental history is allocated after the radios/routes, retaining up to
-602 reports while reserving 64 KiB of free heap for HTTP, debug, OTA and BLE
-connections. If memory is constrained, the device backfill is shorter (reported
-in serial); browser history still retains 600 seconds. A one-report fallback
-avoids an allocation-failure crash. Check runtime heap/FIFO health with BLE and
-the tuning page together; the reserve does not guarantee every later allocation.
+Environmental history now uses fixed bounded storage: the most recent 30 seconds
+at one-second resolution, older data in 30-second buckets across approximately
+600 seconds, at most 51 points. This replaces the adaptive allocation of up to
+602 one-second reports. Current HTTP buffers are sized by selected history rows;
+startup/HTTP memory diagnostics still need monitoring under concurrent use.
 
 The first upload after this partition change must be over **USB**, because a
 normal ArduinoOTA upload does not replace the partition table. Select the new

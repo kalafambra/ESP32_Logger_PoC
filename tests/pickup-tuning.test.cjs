@@ -7,6 +7,8 @@ const ctx=new Proxy({}, {get:(_,key)=>(...args)=>{if(key==='setLineDash')command
 const document={getElementById(id){if(!elements.has(id))elements.set(id,{value:id==='window'?'60':'',textContent:'',innerHTML:'',clientWidth:700,width:0,height:0,disabled:false,addEventListener(event,fn){this[event]=fn;},getContext(){return ctx;}});return elements.get(id);},createElement(){return {click(){}};}};
 let now=1000,badSave=false;
 const config={persisted:true,settings_revision:1,fields:[{key:'stationary_ms',label:'Stillness',unit:'ms',min:500,max:10000,step:10,value:3000,default:3000}]};
+const hiddenValues={led_duty_pct:37,led_period_ms:1200,max_gap_ms:200,smoothing_ms:70,stationary_accel_rms:0.15,noise_multiplier:7.2};
+for(const [key,value] of Object.entries(hiddenValues))config.fields.push({key,label:key,unit:'',min:0,max:10000,step:0.01,value,default:value});
 const columns=['sequence','uptime_ms','valid','active','armed','led_on','accel_deviation','accel_trigger','baseline_noise','noise_multiplier','effective_accel','settings_revision'];
 let packet={uptime_ms:1000,settings_revision:1,columns,rows:[[1,1000,1,0,1,0,0.2,0.6,0.02,6,0.6,1]],pickup:{active:false,state:'armed',quiet_ms:3000,stationary_ms:3000,events:0}};
 const sandbox=vm.createContext({document,window:{devicePixelRatio:1,addEventListener(){},confirm(){return true;}},performance:{now:()=>now},AbortController,URLSearchParams,
@@ -18,11 +20,20 @@ const sandbox=vm.createContext({document,window:{devicePixelRatio:1,addEventList
 const read=code=>vm.runInContext(code,sandbox);
 async function main(){
  vm.runInContext(script,sandbox);await new Promise(resolve=>setImmediate(resolve));
- assert.equal(read('plotSpecs.length'),13,'every threshold/timing family has a graph');
+ assert.equal(read('plotSpecs.map(p=>p.id).join(",")'),'movement,tilt,rotation,quiet-gyro,quiet-time,persistence','only the six requested plots remain');
  assert.equal(read('rows.length'),1);assert.equal(read('rows[0].noise_ratio'),10);
  assert.equal(read('rows[0].required_ratio'),30);assert.ok(timers.includes(200),'5 Hz batched polling');
  assert.ok(commands.some(d=>d.length===2),'thresholds use dashed lines');
  assert.equal(elements.get('setting-stationary_ms').value,'3000');
+ for(const key of Object.keys(hiddenValues)){
+  assert.ok(!elements.has('setting-'+key),'hidden setting has no input: '+key);
+  assert.ok(!elements.get('fields').innerHTML.includes('setting-'+key));
+ }
+ elements.get('setting-stationary_ms').value='4000';
+ await elements.get('settingsForm').submit({preventDefault(){}});
+ const submitted=new URLSearchParams(requests.filter(r=>r.options?.method==='POST').at(-1).options.body);
+ assert.equal(submitted.get('stationary_ms'),'4000');
+ for(const [key,value] of Object.entries(hiddenValues))assert.equal(Number(submitted.get(key)),value,'saving visible edits preserves '+key);
  read('ingest('+JSON.stringify(packet)+')');assert.equal(read('rows.length'),1,'deduplicated');
  packet={...packet,uptime_ms:1100,settings_revision:2,rows:[[2,1100,1,1,1,1,0.9,1.2,0.02,6,1.2,2]],pickup:{...packet.pickup,active:true}};
  read('dirty=true;ingest('+JSON.stringify(packet)+')');
