@@ -29,10 +29,11 @@ const pickupConfig={persisted:false,fields:[
  {key:'stationary_gyro',label:'Stationary rotation',unit:'rad/s',display_unit:'deg/s',display_scale:180/Math.PI,min:0.005,max:0.3,step:0.005,value:0.05,default:0.05}
 ]};
 const point=(sequence,age_ms=10,ok=true)=>({sequence,age_ms,ok,sample_count:5,
+  mpu_temperature_c:31.5,
   temperature_c:ok?[23,22,24]:[null,null,null],humidity_pct:ok?[45,44,46]:[null,null,null],pressure_hpa:ok?[1000,999,1001]:[null,null,null]});
 let response={sequence:1,default_altitude_m:0,uptime_ms:5000,sample_age_ms:10,sample_count:5,
   sensor_ok:true,wifi_connected:true,rssi_dbm:-50,temperature_c:23,humidity_pct:45,pressure_hpa:1000,error:'',history:[point(1)],
-  motion:{sequence:1,sample_age_ms:20,ok:true,error:'',acceleration_m_s2:[0.1,-0.2,9.81],gyroscope_rad_s:[0.01,-0.02,0.003]}};
+  motion:{sequence:1,sample_age_ms:20,ok:true,error:'',temperature_ok:true,temperature_c:31.5,temperature_error:'',acceleration_m_s2:[0.1,-0.2,9.81],gyroscope_rad_s:[0.01,-0.02,0.003]}};
 const context=vm.createContext({document,window:{devicePixelRatio:1,addEventListener(){},confirm(){return true;}},
   performance:{now:()=>now},AbortController,URLSearchParams,setTimeout(fn,ms){scheduled.push(ms);return 1;},clearTimeout(){},setInterval(){},
     fetch:async (url,options)=>{
@@ -56,6 +57,8 @@ const read=expression=>vm.runInContext(expression,context);
 async function main(){
   vm.runInContext(script,context);await new Promise(resolve=>setImmediate(resolve));
   assert.equal(elements.get('temperature').textContent,'23.00');
+  assert.equal(elements.get('mpuTemperature').textContent,'31.50','MPU chip reading has a separate current value');
+  assert.equal(read('history[0].m'),31.5,'MPU temperature shares the environmental graph timeline');
   assert.equal(elements.get('pickup-stationary_ms').value,'3000','runtime metadata populates settings');
   assert.ok(Math.abs(Number(elements.get('pickup-stationary_gyro').value)-0.05*180/Math.PI)<1e-8,'gyro settings displayed in degrees');
   elements.get('pickup-stationary_ms').value='4000';
@@ -95,6 +98,7 @@ async function main(){
   assert.equal(read('motionHistory.length'),1,'motion sequence deduplicated');
   assert.match(requested,/since=1$/);
   fail=true;await read('poll()');assert.match(elements.get('connection').textContent,/unreachable/);
+  assert.equal(elements.get('mpuTemperature').textContent,'\u2014','network failure clears the chip reading');
   assert.equal(read('history.length'),1,'network error does not create false sensor gaps');
   fail=false;now+=16000; // Includes >1.25 s timing jitter relative to the first point.
   response={...response,sequence:4,uptime_ms:20000,history:[point(2,10010),point(3,5010),point(4)]};
@@ -105,6 +109,8 @@ async function main(){
   response={...response,sequence:5,uptime_ms:25000,sensor_ok:false,error:'Incomplete window',temperature_c:null,history:[point(5,0,false)]};
   await read('poll()');assert.match(elements.get('error').textContent,/Incomplete/);
   assert.equal(read('history[4].t'),null,'invalid one-second window creates a real gap');
+  assert.equal(read('history[4].m'),31.5,'BME failure does not discard valid MPU temperature history');
+  assert.equal(elements.get('mpuTemperature').textContent,'31.50','BME failure does not clear the chip reading');
   assert.match(elements.get('motionValues').textContent,/9.810/,'BME error does not hide valid motion');
   response.motion={sequence:2,sample_age_ms:0,ok:false,error:'MPU6050 I2C read failed',acceleration_m_s2:[null,null,null]};
   await read('pollMotion()');
@@ -178,6 +184,15 @@ async function main(){
   await read('poll()');assert.equal(read('history[0].t'),null,'invalid constituent bucket produces a real graph gap');
   response={...response,sequence:1,uptime_ms:100,history:[point(1,0)]};
   await read('poll()');assert.equal(read('history.length'),1,'restart clears coarse and fine histories together');
+  response={...response,sequence:2,uptime_ms:1100,temperature_c:24,sensor_ok:true,
+    motion:{...response.motion,temperature_ok:false,temperature_c:null,temperature_error:'Temperature I2C failed'},
+    history:[{...point(2,0),mpu_temperature_c:null}]};
+  await read('poll()');
+  assert.equal(elements.get('temperature').textContent,'24.00','MPU temperature failure leaves BME reading available');
+  assert.equal(elements.get('mpuTemperature').textContent,'\u2014');
+  assert.match(elements.get('mpuTemperatureError').textContent,/I2C failed/);
+  assert.equal(read('history.at(-1).m'),null,'MPU temperature error makes a gap, not a zero');
+  assert.ok(read('history.at(-1).t!==null'));
   console.log('PASS: dashboard graphs, calibration, pickup settings/status, validation, backfill and retention');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

@@ -12,6 +12,8 @@ class EnvironmentHistory {
     uint16_t samples=0,reports=0;
     bool ok=false;
     PublishedChannel temperature,humidity,pressure;
+    float mpuTemperatureC=0;
+    uint16_t mpuSamples=0;
     /* Use the bucket centre so an average is plotted over the period it represents. */
     uint32_t midpoint()const{return startMs+(endMs-startMs)/2;}
   };
@@ -27,6 +29,7 @@ class EnvironmentHistory {
     Point p;p.firstSequence=p.sequence=sample.sequence;p.startMs=p.endMs=sample.sampleMs;
     p.revision=sample.sequence;p.samples=sample.count;p.reports=1;p.ok=sample.ok;
     p.temperature=sample.temperature;p.humidity=sample.humidity;p.pressure=sample.pressure;
+    p.mpuTemperatureC=sample.mpuTemperatureC;p.mpuSamples=sample.mpuTemperatureOk?1:0;
     recent[recentHead]=p;recentHead=(recentHead+1)%RECENT_CAPACITY;++recentCount;
   }
 
@@ -69,6 +72,10 @@ class EnvironmentHistory {
       mergeChannel(pending.temperature,p.temperature,pending.samples,p.samples);
       mergeChannel(pending.humidity,p.humidity,pending.samples,p.samples);
       mergeChannel(pending.pressure,p.pressure,pending.samples,p.samples);
+      if(p.mpuSamples){
+        pending.mpuTemperatureC=(double(pending.mpuTemperatureC)*pending.mpuSamples+double(p.mpuTemperatureC)*p.mpuSamples)/(pending.mpuSamples+p.mpuSamples);
+        pending.mpuSamples+=p.mpuSamples;
+      }
       pending.sequence=p.sequence;pending.endMs=p.endMs;pending.samples+=p.samples;
       ++pending.reports;pending.ok=pending.ok&&p.ok;
     }
@@ -86,14 +93,14 @@ inline bool runEnvironmentHistorySelfTests(EnvironmentHistory &history){
   history.clear();
   auto sample=[](unsigned i){PublishedSample p;p.sequence=i;p.sampleMs=i*1000;p.count=5;p.ok=true;
     p.temperature.mean=float(i);p.temperature.minimum=-float(i);p.temperature.maximum=float(i)+1;
-    p.humidity=p.pressure=p.temperature;return p;};
+    p.humidity=p.pressure=p.temperature;p.mpuTemperatureC=30+float(i);p.mpuTemperatureOk=true;return p;};
   for(unsigned i=1;i<=31;++i)history.add(sample(i));
   unsigned fine=0,coarse=0;bool correct=true;
   history.visit(0,31000,[&](const EnvironmentHistory::Point &p,bool old){if(old){++coarse;correct&=p.firstSequence==1&&p.reports==1;}else ++fine;});
   if(!correct||fine!=30||coarse!=1)return false;
   for(unsigned i=32;i<=60;++i)history.add(sample(i));
   bool found=false;
-  history.visit(59,60000,[&](const EnvironmentHistory::Point &p,bool old){if(old){found=true;correct&=p.reports==30&&p.samples==150&&p.temperature.mean==15.5f&&p.temperature.minimum==-30&&p.temperature.maximum==31;}});
+  history.visit(59,60000,[&](const EnvironmentHistory::Point &p,bool old){if(old){found=true;correct&=p.reports==30&&p.samples==150&&p.temperature.mean==15.5f&&p.temperature.minimum==-30&&p.temperature.maximum==31&&p.mpuSamples==30&&p.mpuTemperatureC==45.5f;}});
   if(!found||!correct||history.selected(59,60000)!=2)return false;
   for(unsigned i=61;i<=1800;++i)history.add(sample(i));
   if(history.selected(0,1800000)>EnvironmentHistory::MAX_POINTS)return false;
@@ -103,6 +110,8 @@ inline bool runEnvironmentHistorySelfTests(EnvironmentHistory &history){
   found=false;history.visit(0,32000,[&](const EnvironmentHistory::Point &p,bool old){if(old){found=true;correct&=p.temperature.mean==17.5f;}});
   if(!found||!correct)return false;
   history.clear();a=sample(1);a.ok=false;history.add(a);history.add(sample(31));
-  history.visit(0,31000,[&](const EnvironmentHistory::Point &p,bool old){if(old)correct&=!p.ok;});
+  history.visit(0,31000,[&](const EnvironmentHistory::Point &p,bool old){if(old)correct&=!p.ok&&p.mpuSamples==1;});
+  history.clear();a=sample(1);a.mpuTemperatureOk=false;history.add(a);history.add(sample(31));
+  history.visit(0,31000,[&](const EnvironmentHistory::Point &p,bool old){if(old)correct&=p.ok&&p.mpuSamples==0;});
   history.clear();return correct;
 }

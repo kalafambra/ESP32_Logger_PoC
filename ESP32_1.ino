@@ -168,6 +168,8 @@ void publishWindow(uint32_t now) {
   latest = PublishedSample{};
   latest.sequence = sequence;
   latest.sampleMs = now;
+  acquireMotionTemperature(now); // Synchronized 1 Hz chip-temperature sample, independent of BME validity.
+  latest.mpuTemperatureC=motionTemperatureC;latest.mpuTemperatureOk=motionTemperatureOk;
   latest.count = window.count;
   // Reject missing readings, any recorded error, and excessively delayed windows.
   latest.ok = sensorReady && !windowFailed && window.count == SAMPLES_PER_WINDOW && now - windowStart < PUBLISH_INTERVAL_MS + SAMPLE_INTERVAL_MS;
@@ -225,7 +227,7 @@ void sendReadings() {
   uint32_t since = server.hasArg("since") ? strtoul(server.arg("since").c_str(), nullptr, 10) : 0;
   if (since > latest.sequence) since = 0; // Device restarted.
   String json;
-  json.reserve(2400+environmentHistory.selected(since,now)*240); // Most live responses contain just two changed rows.
+  json.reserve(2600+environmentHistory.selected(since,now)*272); // Includes the second temperature trace.
   json = "{\"sequence\":" + String(latest.sequence);
   json += ",\"uptime_ms\":" + String(now);
   json += ",\"history_mode\":\"tiered_30s\",\"history_recent_ms\":30000,\"history_coarse_ms\":30000";
@@ -257,6 +259,7 @@ void sendReadings() {
     json += ",\"temperature_c\":"; appendChannel(json, point.temperature, point.ok);
     json += ",\"humidity_pct\":"; appendChannel(json, point.humidity, point.ok);
     json += ",\"pressure_hpa\":"; appendChannel(json, point.pressure, point.ok);
+    json+=",\"mpu_temperature_c\":"+(point.mpuSamples==point.reports?String(point.mpuTemperatureC,3):String("null"));
     json += '}';
   });
   json += "]}";

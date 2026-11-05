@@ -34,6 +34,10 @@ bool motionCalibrating = false;
 unsigned motionCalibrationSamples = 0;
 double motionCalibrationSum[3] = {}, motionCalibrationSquares[3] = {};
 const char *motionCalibrationError = "";
+float motionTemperatureC=0;
+bool motionTemperatureOk=false;
+uint32_t motionTemperatureMs=0;
+const char *motionTemperatureError="Waiting for MPU6050 temperature";
 
 /* Explicit sign extension keeps both FIFO and direct-register decoding identical. */
 constexpr int32_t decodeMotionRaw(uint8_t high, uint8_t low) {
@@ -44,6 +48,11 @@ static_assert(decodeMotionRaw(0x40, 0x00) == 16384, "+1 g decoding");
 static_assert(decodeMotionRaw(0xC0, 0x00) == -16384, "-1 g decoding");
 static_assert(decodeMotionRaw(0xFF, 0xFF) == -1, "negative sign extension");
 static_assert(decodeMotionRaw(0x80, 0x00) == -32768, "negative full scale");
+
+/* TEMP_OUT is signed; use the manufacturer's factory conversion without an ambient-temperature offset. */
+constexpr float decodeMotionTemperature(int32_t raw){return raw/340.0f+36.53f;}
+static_assert(decodeMotionTemperature(-3400)>26.529f&&decodeMotionTemperature(-3400)<26.531f,"negative temperature register decoding");
+static_assert(decodeMotionTemperature(3400)>46.529f&&decodeMotionTemperature(3400)<46.531f,"positive temperature register decoding");
 
 /* Signal work only: I2C, allocation and serial output must never run in the ISR. */
 void ARDUINO_ISR_ATTR motionDataReadyISR() {
@@ -60,6 +69,16 @@ bool motionRead(uint8_t reg, uint8_t *data, uint8_t count) {
   if (Wire.endTransmission(false) != 0 || Wire.requestFrom(MPU_ADDRESS, count) != count) return false;
   for (uint8_t i = 0; i < count; ++i) data[i] = Wire.read();
   return true;
+}
+
+/* One direct two-byte read per environmental report leaves the 12-byte motion FIFO layout intact. */
+void acquireMotionTemperature(uint32_t now){
+  motionTemperatureMs=now;motionTemperatureOk=false;
+  if(!motionReady||motionPaused||!motionSettled){motionTemperatureError="MPU6050 temperature unavailable";return;}
+  uint8_t raw[2];
+  if(!motionRead(0x41,raw,2)){motionTemperatureError="MPU6050 temperature I2C read failed";return;}
+  motionTemperatureC=decodeMotionTemperature(decodeMotionRaw(raw[0],raw[1]));
+  motionTemperatureOk=true;motionTemperatureError="";
 }
 
 /* Acknowledge each configuration write rather than silently using unknown sensor settings. */
@@ -268,8 +287,9 @@ void publishMotion(uint32_t now) {
   motionReports[motionHead] = motionLatest;
   motionHead = (motionHead + 1) % MOTION_HISTORY_SIZE;
   if (motionHistoryCount < MOTION_HISTORY_SIZE) ++motionHistoryCount;
-  if (motionLatest.ok) Serial.printf("[mpu %lu, n=%u] mean X=%.3f Y=%.3f Z=%.3f m/s^2\n",
-    (unsigned long)motionLatest.sequence, motionSamples, motionLatest.mean[0], motionLatest.mean[1], motionLatest.mean[2]);
+  const String temperatureText=motionTemperatureOk?String(motionTemperatureC,2):String("unavailable");
+  if (motionLatest.ok) Serial.printf("[mpu %lu, n=%u] mean X=%.3f Y=%.3f Z=%.3f m/s^2 | chip T=%s C\n",
+    (unsigned long)motionLatest.sequence, motionSamples, motionLatest.mean[0], motionLatest.mean[1], motionLatest.mean[2],temperatureText.c_str());
   else Serial.printf("[mpu %lu, n=%u] %s\n", (unsigned long)motionLatest.sequence, motionSamples, motionLatest.error);
   motionSamples = 0; motionWindowFailed = false; motionLastReport = now;
 }
@@ -351,12 +371,15 @@ void appendMotion(String &json, uint32_t now) {
   uint32_t interrupts;
   portENTER_CRITICAL(&motionMux); interrupts = motionInterrupts; portEXIT_CRITICAL(&motionMux);
   const bool valid = motionLatest.sequence && motionLatest.ok && now - motionLatest.sampleMs <= MOTION_REPORT_MS + 1500;
+  const bool temperatureValid=motionTemperatureOk&&now-motionTemperatureMs<=2500;
   json += ",\"motion\":{\"sequence\":" + String(motionLatest.sequence) + ",\"sample_age_ms\":" + String(now - motionLatest.sampleMs);
   json += ",\"ok\":"; json += valid ? "true" : "false";
   json += ",\"error\":\""; json += motionLatest.ok && !valid ? "Motion report stale" : motionLatest.sequence ? motionLatest.error : motionError;
   json += "\",\"warning\":\""; if (motionReady && !interrupts && now - motionStartedAt > 1000) json += "No INT edges; check GPIO17 wiring (FIFO polling fallback active)";
   json += "\",\"sample_count\":" + String(motionLatest.samples) + ",\"target_hz\":100,\"publish_interval_ms\":1000";
   json += ",\"interrupts_seen\":" + String(interrupts) + ",\"fifo_overflows\":" + String(motionOverflowCount);
+  json+=",\"temperature_ok\":"+String(temperatureValid?"true":"false")+",\"temperature_c\":"+(temperatureValid?String(motionTemperatureC,3):String("null"));
+  json+=",\"temperature_error\":\"";json+=temperatureValid?"":motionTemperatureOk?"MPU6050 temperature stale":motionTemperatureError;json+='"';
   json += ",\"acceleration_m_s2\":"; motionArray(json, motionLatest.mean, valid);
   json += ",\"gyroscope_rad_s\":"; motionArray(json, motionGyroMean, valid);
   float degrees[3],rawDegrees[3],biasDegrees[3];

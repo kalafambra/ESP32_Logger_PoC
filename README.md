@@ -9,12 +9,27 @@ MPU6050, serial diagnostics and password-protected ArduinoOTA.
 | --- | --- | --- |
 | BME280 | 5 Hz (every 200 ms) | 1 Hz: mean/min/max of exactly five readings |
 | MPU6050 | 100 Hz, interrupt + FIFO | 1 Hz: mean XYZ, plus min/max in the API |
+| MPU6050 chip temperature | 1 Hz, direct temperature-register read | 1 Hz, on the shared temperature graph |
 
 Both dashboard endpoints are polled once per second, with no overlapping
 requests within a polling stream. Motion includes gravity. All graphs retain
 up to 600 seconds in the browser, expanding to fill their width when history
 is shorter. Environmental extrema remain at 30% opacity. Motion plots mean
 X/Y/Z as three colored lines; raw 100 Hz frames are not transmitted.
+
+The temperature graph overlays blue BME280 ambient readings and amber MPU6050
+chip readings on one Celsius axis, with separately labeled current values.
+MPU temperature is read from signed TEMP_OUT_H/L (0x41/0x42), using
+`raw / 340 + 36.53` from the [manufacturer register map](https://invensense.tdk.com/wp-content/uploads/2015/02/MPU-6000-Register-Map.pdf).
+It measures chip temperature, so it may differ from the BME280 ambient reading.
+The extra read does not enable temperature in the FIFO or change its 12-byte layout.
+Both temperature series share the 30-second fine / older 30-second average
+history. Missing MPU temperatures make gaps independently of BME status;
+partial temperature failure within a coarse bucket makes that sensor's bucket
+unavailable. Dew point continues using the BME280 reading.
+Current MPU temperature and its independent health/error are available as
+`motion.temperature_c`, `motion.temperature_ok`, `motion.temperature_error`;
+history rows include `mpu_temperature_c`. Serial motion reports include chip T.
 
 ## Files
 
@@ -156,7 +171,7 @@ report revision: promotions resend changed older buckets, so a browser replaces
 their earlier versions and removes the fine reports they summarize. Buckets are
 aligned to 30-second device-uptime windows and plotted at their source-time
 midpoint. Startup/edge buckets can be partial; sensor-error buckets remain gaps.
-The fixed history uses 3,280 bytes. HTTP response reservation follows the number
+The fixed history uses 3,688 bytes including the additional chip-temperature series. HTTP response reservation follows the number
 of selected rows, replacing the previous unconditional 16,000-byte reservation.
 
 The archived fox image uses a 4-bit indexed palette (16 entries, including transparency):

@@ -42,6 +42,8 @@ struct PublishedSample {
   bool ok = false;
   const char *error = "Waiting for first one-second window";
   PublishedChannel temperature, humidity, pressure;
+  float mpuTemperatureC=0;
+  bool mpuTemperatureOk=false;
 };
 
 

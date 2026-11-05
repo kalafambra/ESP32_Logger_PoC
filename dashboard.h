@@ -11,6 +11,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"DASHBOARD(
 :root{color-scheme:dark;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#11161d;color:#e4e9ef}
 *{box-sizing:border-box}body{max-width:1100px;margin:auto;padding:32px 24px;background:#11161d}
 .brand{margin-bottom:28px}
+.temperature-values{display:flex;gap:28px;flex-wrap:wrap}.temperature-values small{display:block;margin-bottom:4px}#mpuTemperatureError{color:#e0a0a6}.bme-label{color:#8db4d6}.mpu-label{color:#c9b789}
 a{color:#91b6d8;text-underline-offset:3px}a:hover{color:#c1d8ec}
 button{font:inherit;padding:10px 14px;border:1px solid #46566a;border-radius:8px;background:#253344;color:#e4e9ef;cursor:pointer}button:hover{background:#304259}button:focus-visible{outline:2px solid #9fc5e5;outline-offset:3px}
 h1{font-size:clamp(1.7rem,4vw,2.65rem);letter-spacing:-.04em;margin:4px 0 10px;font-weight:750}.eyebrow{text-transform:uppercase;letter-spacing:.18em;color:#91b6d8;font-size:.72rem;font-weight:750}.brand p{margin:0}
@@ -30,8 +31,8 @@ small{color:#94a3b4}footer{margin:24px 0;color:#94a3b4;font-size:.8rem;line-heig
 <details class="pickup-settings"><summary>Pickup detection settings</summary><p>Saved on the ESP32 and restored after reboot. Changing settings restarts baseline learning. An active alert clears only after confirmed stillness, including when held still in your hand.</p><form id="pickupSettingsForm"><div id="pickupFields" class="pickup-fields"></div><button id="pickupSave" type="submit" disabled>Save settings</button><button id="pickupDefaults" type="button" disabled>Restore defaults</button><p id="pickupSettingsStatus" role="status">Loading settings…</p></form></details>
 <div class="settings"><label for="altitude">Altitude above sea level (m)</label><input id="altitude" type="number" min="-500" max="9000" step="0.1" disabled aria-describedby="altitudeError"><span id="altitudeError" role="status"></span></div>
 <p>Dew point: <strong id="dewPoint">—</strong> °C <small>(calculated from one-second mean temperature and humidity)</small></p>
-<p>Solid line: mean of 5 readings. Faint lines (30% opacity): minimum and maximum.</p><main class="cards">
-<article><h2>Temperature</h2><span class="value" id="temperature">—</span> <span class="unit">°C</span><canvas id="tempChart" role="img" aria-label="Temperature in degrees Celsius over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
+<p>BME280: solid mean of 5 readings, faint minimum/maximum (30% opacity). MPU6050 temperature: one sample per second.</p><main class="cards">
+<article><h2>Temperature</h2><div class="temperature-values"><div><small class="bme-label">BME280 · ambient</small><span class="value" id="temperature">—</span> <span class="unit">°C</span></div><div><small class="mpu-label">MPU6050 · chip</small><span class="value" id="mpuTemperature">—</span> <span class="unit">°C</span></div></div><small id="mpuTemperatureError" role="status"></small><canvas id="tempChart" role="img" aria-label="BME280 ambient and MPU6050 chip temperatures in degrees Celsius over up to 600 seconds"></canvas><small><span class="bme-label">Blue: BME280</span> · <span class="mpu-label">Amber: MPU6050 chip</span> · Time relative to now (seconds)</small></article>
 <article><h2>Relative humidity</h2><span class="value" id="humidity">—</span> <span class="unit">%</span><canvas id="humChart" role="img" aria-label="Relative humidity in percent over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
 <article><h2>Estimated sea-level pressure</h2><span class="value" id="pressure">—</span> <span class="unit">hPa</span><canvas id="pressureChart" role="img" aria-label="Sea-level pressure over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
 <article><h2>MPU6050 acceleration</h2><p id="motionValues">Waiting for motion sensor</p><p><strong>Gyroscope</strong><br><span id="gyroValues">Waiting for motion sensor</span><br><small>One-second mean · saved zero-rate bias corrected · deg/s</small></p><button id="gyroCalibrate" type="button">Calibrate gyro (keep stationary)</button><p id="motionError" role="status"></p><button id="motionCalibrate" type="button" style="padding:10px 14px;border:1px solid #46566a;border-radius:9px;background:#253344;color:#e4e9ef;font:inherit;cursor:pointer">Calibrate flat (Z up)</button><p id="motionCalibrationStatus" role="status">Calibration removes fixed bias; gravity is retained.</p><small><span style="color:#8db4d6">X</span> · <span style="color:#86b8ad">Y</span> · <span style="color:#c9b789">Z</span> · m/s², includes gravity · one-second means · 100 Hz acquisition target</small><canvas id="motionChart" role="img" aria-label="MPU6050 X Y Z acceleration in meters per second squared"></canvas><small>Time relative to now (seconds)</small></article>
@@ -47,6 +48,12 @@ let altitudeM=0,altitudeInitialized=false,currentReading=null;
 const $=id=>document.getElementById(id);
 /* Clear derived fields too, so a network/sensor error cannot leave plausible stale values. */
 function clearValues(){currentReading=null;for(const id of ['temperature','humidity','pressure','dewPoint'])$(id).textContent='—';}
+/* Chip temperature has its own validity, so a BME280 failure cannot hide a healthy MPU6050 value. */
+function updateMpuTemperature(motion){
+ const valid=motion?.temperature_ok&&Number.isFinite(motion.temperature_c);
+ $('mpuTemperature').textContent=valid?motion.temperature_c.toFixed(2):'—';
+ $('mpuTemperatureError').textContent=valid?'':(motion?.temperature_error||'MPU6050 temperature unavailable');
+}
 // Standard-atmosphere reduction, matching Adafruit's seaLevelForAltitude.
 /* Reduce measured pressure to a common sea-level reference using this tab's altitude. */
 function seaLevelPressure(pressure,altitude){return pressure/Math.pow(1-altitude/44330,5.255);}
@@ -97,7 +104,8 @@ function draw(onlyMotion=false){
   const ctx=canvas.getContext('2d');ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,w,h);
   const left=64,right=w-12,top=25,bottom=h-30;
   const points=records.filter(p=>p[key]&&p[key].every(Number.isFinite));
-  const values=points.flatMap(p=>channelValues(p,key)); // Include extrema in vertical scaling.
+  const values=points.flatMap(p=>channelValues(p,key)); // Include extrema and both temperature sources in scaling.
+  if(key==='t')for(const point of records)if(Number.isFinite(point.m))values.push(point.m);
   let lo=values.length?Math.min(...values):0,hi=values.length?Math.max(...values):1;
   const margin=Math.max((hi-lo)*.15,key==='p'?.5:.2);lo-=margin;hi+=margin;
   ctx.font='11px system-ui';ctx.fillStyle='#a5b1bf';ctx.fillText(unit,left,13);
@@ -126,7 +134,17 @@ function draw(onlyMotion=false){
    ctx.stroke();
   }
   ctx.globalAlpha=1;
-  if(!points.length){ctx.fillStyle='#a5b1bf';ctx.fillText('Waiting for valid samples',left+6,(top+bottom)/2);}
+  if(key==='t'){
+   ctx.strokeStyle='#c9b789';ctx.lineWidth=2;ctx.beginPath();let previous=null;
+   for(const point of records){
+    if(!Number.isFinite(point.m)){previous=null;continue;}
+    const x=left+(point.at-start)/span*(right-left),y=bottom-(point.m-lo)/(hi-lo)*(bottom-top);
+    if(!previous||(point.firstSequence??point.sequence)!==previous.sequence+1)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+    previous=point;
+   }
+   ctx.stroke();
+  }
+  if(!values.length){ctx.fillStyle='#a5b1bf';ctx.fillText('Waiting for valid samples',left+6,(top+bottom)/2);}
  }
 }
 /* Fetch incremental reports and backfill missed polls, without overlapping HTTP requests. */
@@ -164,12 +182,14 @@ async function poll(){
    }
    // Translate device-relative age into the browser's monotonic clock domain.
    history.push({firstSequence:first,sequence:point.sequence,revision,resolution:coarse?30000:1000,at:now-Math.min(point.age_ms,600000),
-                 t:ok?point.temperature_c:null,h:ok?point.humidity_pct:null,p:ok?point.pressure_hpa:null});
+                 t:ok?point.temperature_c:null,h:ok?point.humidity_pct:null,p:ok?point.pressure_hpa:null,
+                 m:Number.isFinite(point.mpu_temperature_c)?point.mpu_temperature_c:null});
    lastSequence=Math.max(lastSequence??0,point.sequence);
   }
   history.sort((a,b)=>a.firstSequence-b.firstSequence);
   if(data.history_mode==='tiered_30s')lastSequence=Math.max(lastSequence??0,data.sequence);
   const valid=data.sensor_ok&&[data.temperature_c,data.humidity_pct,data.pressure_hpa].every(Number.isFinite);
+  updateMpuTemperature(data.motion);
   $('connection').textContent=data.wifi_connected?'Connected to ESP32':'ESP32 Wi-Fi disconnected';
   $('error').textContent=valid?'':('Sensor: '+(data.error||'Waiting for a complete one-second window'));
   $('detail').textContent='Report #'+data.sequence+' · '+data.sample_count+'/5 readings · '+(data.sample_age_ms===null?'No report yet':data.sample_age_ms+' ms old')+' · Wi-Fi '+data.rssi_dbm+' dBm';
@@ -178,6 +198,7 @@ async function poll(){
   }else clearValues();
  }catch(error){
   clearValues();$('connection').textContent='Disconnected / ESP32 unreachable';
+  $('mpuTemperature').textContent='—';$('mpuTemperatureError').textContent='Temperature request failed';
   $('error').textContent='Request failed: '+error.message;
   $('detail').textContent=lastSuccess?'Last contact '+Math.round((performance.now()-lastSuccess)/1000)+' s ago':'Check the device IP and local Wi-Fi connection';
   // Preserve history: the next successful request backfills missed reports.
