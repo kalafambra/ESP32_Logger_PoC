@@ -2,3 +2,7 @@ config.h
 build/
 build-fox/
 build-ble/
+.venv-device-tests/
+test-results/
+__pycache__/
+*.py[cod]

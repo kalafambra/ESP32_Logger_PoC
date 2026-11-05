@@ -414,6 +414,10 @@ void sendMotionReadings() {
     if (sent++) json += ',';
     json += "{\"sequence\":" + String(report.sequence) + ",\"age_ms\":" + String(now - report.sampleMs) + ",\"ok\":";
     json += report.ok ? "true" : "false";
+    // Counts and the original error survive backfill, so missed live polls
+    // do not prevent independent acquisition-completeness checks.
+    json += ",\"sample_count\":" + String(report.samples);
+    json += ",\"error\":\""; json += report.error; json += '"';
     json += ",\"a\":"; motionArray(json, report.mean, report.ok); json += '}';
   }
   json += "]}";

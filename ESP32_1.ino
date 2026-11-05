@@ -20,6 +20,8 @@ WebServer server(80);
 uint8_t sensorAddress = 0;
 bool sensorReady = false, converting = false;
 uint32_t lastStart = 0, conversionStart = 0, windowStart = 0;
+uint32_t missedSampleDeadlines = 0, lateConversionServices = 0, missedReportDeadlines = 0;
+unsigned windowScheduledSlots = 0;
 uint32_t lastReconnect = 0;
 bool wifiRestartPending = false;
 bool otaConfigured = false, otaStarted = false;
@@ -102,7 +104,13 @@ void acquireSensor() {
   if (!sensorReady) return;  // Initialization errors require a reset after repair.
   const uint32_t now = millis();
   if (!converting && now - lastStart >= SAMPLE_INTERVAL_MS) {
-    lastStart = now;
+    // Keep the original 200 ms grid. Skip elapsed slots instead of taking a
+    // burst of replacement readings that would misrepresent the time average.
+    const uint32_t slots = (now - lastStart) / SAMPLE_INTERVAL_MS;
+    missedSampleDeadlines += slots - 1;
+    windowScheduledSlots += slots;
+    if (slots > 1) { windowFailed = true; sensorError = "Missed sampling deadline"; }
+    lastStart += slots * SAMPLE_INTERVAL_MS;
     // ctrl_meas: temperature x1, pressure x1, forced mode. Humidity x1
     // was configured by setSampling(). Do not call takeForcedMeasurement():
     // that library method waits for the sensor conversion to complete.
@@ -115,17 +123,18 @@ void acquireSensor() {
   }
   // Leave time for x1 temperature, pressure and humidity conversion, without sleeping.
   if (!converting || now - conversionStart < 15) return;
-  // Bound how long a conversion may occupy the acquisition state machine.
-  if (now - conversionStart > 80) {
-    failSample("Conversion timeout");
-    return;
-  }
   uint8_t status;
   if (!readRegisters(0xF3, &status, 1)) {
     failSample("I2C status read failed");
     return;
   }
-  if (status & 0x09) return;  // measuring or calibration update
+  // A late loop visit does not mean the sensor timed out: first check whether
+  // conversion actually finished. Only a still-busy sensor can time out.
+  if (status & 0x09) {
+    if (now - conversionStart > 80) failSample("Conversion timeout (sensor still busy)");
+    return;
+  }
+  if (now - conversionStart > 80) ++lateConversionServices;
   uint8_t raw[8];
   // Check the complete raw frame before asking the library for compensated values.
   if (!readRegisters(0xF7, raw, sizeof(raw))) {
@@ -164,6 +173,11 @@ void acquireSensor() {
  */
 void publishWindow(uint32_t now) {
   if (now - windowStart < PUBLISH_INTERVAL_MS) return;
+  const uint32_t elapsedWindows = (now - windowStart) / PUBLISH_INTERVAL_MS;
+  // Slots never reached before the boundary are lost, not filled in later.
+  if (windowScheduledSlots < SAMPLES_PER_WINDOW)
+    missedSampleDeadlines += SAMPLES_PER_WINDOW - windowScheduledSlots;
+  missedSampleDeadlines += (elapsedWindows - 1) * SAMPLES_PER_WINDOW;
   const uint32_t sequence=latest.sequence+1;
   latest = PublishedSample{};
   latest.sequence = sequence;
@@ -198,8 +212,12 @@ void publishWindow(uint32_t now) {
   window = SampleWindow{};
   windowFailed = false;
   converting = false; // Do not carry a late conversion into the next window.
-  windowStart = now;
-  lastStart = now - SAMPLE_INTERVAL_MS; // First conversion starts immediately.
+  // Advance on the original one-second grid, without manufacturing reports
+  // for windows during which acquisition could not run.
+  missedReportDeadlines += elapsedWindows - 1;
+  windowStart += elapsedWindows * PUBLISH_INTERVAL_MS;
+  windowScheduledSlots = 0;
+  lastStart = windowStart - SAMPLE_INTERVAL_MS; // First slot stays on the fixed grid.
 }
 
 /*
@@ -236,6 +254,9 @@ void sendReadings() {
   json += ",\"sample_ms\":" + String(latest.sampleMs);
   json += ",\"sample_age_ms\":" + (latest.sequence ? String(age) : String("null"));
   json += ",\"sample_interval_ms\":200,\"publish_interval_ms\":1000,\"sample_count\":" + String(latest.count);
+  json += ",\"missed_sample_deadlines\":" + String(missedSampleDeadlines);
+  json += ",\"missed_report_deadlines\":" + String(missedReportDeadlines);
+  json += ",\"late_conversion_services\":" + String(lateConversionServices);
   json += ",\"sensor_ok\":"; json += fresh ? "true" : "false";
   json += ",\"error\":\""; json += error; json += "\"";
   json += ",\"wifi_connected\":";
@@ -314,6 +335,7 @@ void setup() {
       Serial.printf("[ota] Error %u: %s\n", unsigned(error), reason);
       // Discard the sampling window interrupted by the attempted transfer.
       window = SampleWindow{};
+      windowScheduledSlots = 0;
       failSample("OTA interrupted acquisition; window discarded");
       windowStart = millis();
       lastStart = windowStart - SAMPLE_INTERVAL_MS;

@@ -342,3 +342,16 @@ the single **Pickup lists** text characteristic and Android naming import,
 ten-event persistent storage, UTC handling, and phone/USB verification. This
 version requires the **No FS 4MB (2MB APP x2)** partition
 scheme and a one-time USB upload before OTA can resume with the larger binary.
+
+Live device/dashboard test suite: see [tests/DEVICE_TESTS.md](tests/DEVICE_TESTS.md)
+for the one-minute continuity/latency test, browser rendering checks, history,
+recovery, concurrency and soak profiles, and local HTML/JSON/CSV reports.
+
+Acquisition timing: BME readings follow a fixed 200 ms schedule and reports
+follow fixed one-second boundaries. Missed slots are skipped, never replaced
+with burst readings. `/api/readings` exposes cumulative `missed_sample_deadlines`
+(skipped sampling slots), `missed_report_deadlines` (whole skipped report windows)
+and `late_conversion_services` (completed conversions read after 80 ms).
+A conversion timeout means the sensor was still busy when checked after 80 ms;
+late servicing alone is not a sensor timeout. Motion history now includes
+`sample_count` and `error` for every row, allowing sample accounting after backfill.
