@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const source = fs.readFileSync(path.join(__dirname, '..', 'spectrum_analysis.h'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '..', 'spectrum_analysis.cpp'), 'utf8');
 const config=fs.readFileSync(path.join(__dirname,'..','audio_config.h'),'utf8');
 const size = Number(config.match(/AUDIO_FFT_SIZE = (\d+)/)[1]);
 const rate = Number(config.match(/AUDIO_SAMPLE_RATE_HZ = (\d+)/)[1]);
@@ -13,9 +13,9 @@ function translate(body) {
     .replace(/\b(float|unsigned)\b/g, 'let')
     .replace(/(\d+(?:\.\d*)?(?:e[+-]?\d+)?)f\b/g, '$1');
 }
-const ctor = source.match(/SpectrumAnalysis\(\) \{([\s\S]*?)\n  \}/)[1];
-const analyze = source.match(/void analyze\(\) \{([\s\S]*?)\n  \}/)[1];
-const push = source.match(/bool push\(int32_t sample\) \{([\s\S]*?)\n  \}/)[1];
+const ctor = source.match(/SpectrumAnalysis::SpectrumAnalysis\(\) \{([\s\S]*?)\n\}/)[1];
+const analyze = source.match(/void SpectrumAnalysis::analyze\(\) \{([\s\S]*?)\n\}/)[1];
+const push = source.match(/bool SpectrumAnalysis::push\(int32_t sample\) \{([\s\S]*?)\n\}/)[1];
 const state = {SIZE:size,BINS:size/2+1,real:new Float32Array(size),imag:new Float32Array(size),
   window:new Float32Array(size/2+1),windowEnergy:0,rmsPower:0,
   count:0,clipped:0,cosf:Math.cos,sinf:Math.sin,fabsf:Math.abs};

@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include <Arduino.h>
 
 // Use a 2.4 GHz Wi-Fi network. Credentials stay on the device, not in the API.
 constexpr char WIFI_SSID[] = "YOUR_WIFI_SSID";
@@ -10,11 +11,8 @@ constexpr int STATUS_LED_PIN = 2;
 constexpr uint8_t LED_ON = HIGH;
 constexpr uint32_t SAMPLE_INTERVAL_MS = 200;
 
-
-
 // Set your sensor altitude above sea level in meters before compiling (-500 to 9000).
 constexpr float DEFAULT_ALTITUDE_M = 0.0f;
-
 
 // Arduino IDE network-port name. Use letters, digits and hyphens.
 constexpr char OTA_HOSTNAME[] = "esp32-bme280";

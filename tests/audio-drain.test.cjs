@@ -1,13 +1,14 @@
 // Exercise the firmware's bounded drain loop with deterministic DMA backlog.
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
-const source=fs.readFileSync(path.join(__dirname,'..','microphone_spectrum.h'),'utf8');
+const source=fs.readFileSync(path.join(__dirname,'..','microphone_spectrum.cpp'),'utf8');
 const hardware=fs.readFileSync(path.join(__dirname,'..','microphone.h'),'utf8');
 const buffers=Number(hardware.match(/MICROPHONE_DMA_BUFFERS = (\d+)/)[1]);
-const body=source.match(/void serviceMicrophoneAudio\(\) \{([\s\S]*?)\n\}/)[1].replace('unsigned block','let block');
+const body=source.match(/void serviceMicrophoneAudio\(\) \{([\s\S]*?)\n\}/)[1]
+ .replace('unsigned block','let block').replace('const AudioBlock samples','const samples');
 function fixture(queued,refill=false){
  const c={MICROPHONE_DMA_BUFFERS:buffers,microphoneBlockCount:0,reads:0,frames:0,partial:0,queued,
-   serviceMicrophone(){c.reads++;c.microphoneBlockCount=c.queued?256:0;if(c.queued&&!refill)c.queued--;},
-   serviceMicrophoneSpectrum(){c.partial+=c.microphoneBlockCount;c.frames+=Math.floor(c.partial/512);c.partial%=512;}};
+   serviceMicrophone(){c.reads++;c.microphoneBlockCount=c.queued?256:0;if(c.queued&&!refill)c.queued--;return {count:c.microphoneBlockCount};},
+   serviceMicrophoneSpectrum(samples){c.partial+=samples.count;c.frames+=Math.floor(c.partial/512);c.partial%=512;}};
  vm.createContext(c);c.drain=()=>vm.runInContext(body,c);return c;
 }
 let c=fixture(6);c.drain();assert.equal(c.queued,0);assert.equal(c.frames,3);

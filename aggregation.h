@@ -8,8 +8,10 @@ struct ChannelStats {
   void add(float value, bool first) {
     sum += value;
     // Seed extrema from real data so negative values are not biased by zero.
-    if (first || value < minimum) minimum = value;
-    if (first || value > maximum) maximum = value;
+    if (first || value < minimum)
+      minimum = value;
+    if (first || value > maximum)
+      maximum = value;
   }
 };
 
@@ -42,8 +44,6 @@ struct PublishedSample {
   bool ok = false;
   const char *error = "Waiting for first one-second window";
   PublishedChannel temperature, humidity, pressure;
-  float mpuTemperatureC=0;
-  bool mpuTemperatureOk=false;
+  float mpuTemperatureC = 0;
+  bool mpuTemperatureOk = false;
 };
-
-

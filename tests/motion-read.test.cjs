@@ -1,5 +1,5 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
-const source=fs.readFileSync(path.join(__dirname,'..','motion.h'),'utf8');
+const source=fs.readFileSync(path.join(__dirname,'..','motion.cpp'),'utf8');
 const body=source.match(/bool motionRead\(uint8_t reg, uint8_t \*data, uint8_t count\) \{([\s\S]*?)\n\}/)[1].replace('uint8_t i','let i');
 function read({ack=0,returned=3,enabled=true}={}){
  const ops=[],data=[0,0,0];let next=10;

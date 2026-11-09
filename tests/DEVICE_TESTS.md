@@ -136,7 +136,7 @@ These fault-injection tests exercise constant healthy data, missing/backfilled
 reports, frozen sequences, reboots, wrong sample counts, FIFO errors, conflicting
 data, incorrect history averages, browser stalls, planned pauses and heap trends.
 They validate the test analyzer and do not establish hardware correctness.
-The acquisition regression test executes the sketch's timing/status branches
+The acquisition regression test executes environment.cpp's timing/status branches
 with deterministic time and sensor stubs (C++ type/reference syntax is adapted
 for JavaScript). It covers late completed conversions, busy-sensor timeout, I2C
 failure, scheduling jitter, skipped slots and fixed report-boundary reset.

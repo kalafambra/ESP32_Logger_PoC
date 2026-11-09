@@ -1,6 +1,6 @@
 // Run with Node.js: node tests/pickup-tuning.test.cjs
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
-const script=fs.readFileSync('pickup_tuning.h','utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+const script=fs.readFileSync('web_assets.cpp','utf8').split('R"TUNING(')[1].match(/<script>([\s\S]*?)<\/script>/)[1];
 new vm.Script(script);
 const elements=new Map(),commands=[],timers=[],requests=[];
 const ctx=new Proxy({}, {get:(_,key)=>(...args)=>{if(key==='setLineDash')commands.push(args[0]);}});

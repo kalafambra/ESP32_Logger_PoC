@@ -1,10 +1,15 @@
 // Execute the firmware aggregation function against deterministic frame powers.
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
-const source=fs.readFileSync(path.join(__dirname,'..','microphone_spectrum.h'),'utf8');
-function translate(body){return body.replace(/const (uint32_t|float|unsigned) /g,'const ').replace(/size_t i/g,'let i').replace(/unsigned (i|k)/g,'let $1')
+const source=fs.readFileSync(path.join(__dirname,'..','microphone_spectrum.cpp'),'utf8');
+function translate(body){return body
+ .replace('  const MicrophoneStatus microphone = microphoneStatus();','')
+ .replace(/microphone\.(ready|paused|overflows)/g,(_,field)=>({ready:'microphoneReady',paused:'microphonePaused',overflows:'microphoneOverflows'}[field]))
+ .replace(/block\.count/g,'microphoneBlockCount').replace(/block\.samples/g,'microphoneBlock')
+ .replace(/report\.(\w+)/g,(_,field)=>({valid:'spectrumValid',binsDb:'spectrumDb',rmsDb:'spectrumRmsDb',bandsDb:'spectrumBandsDb',peakHz:'spectrumPeakHz',frames:'spectrumPublishedFrames',clipped:'spectrumPublishedClipped',sequence:'spectrumSequence',sampleMs:'spectrumMs'}[field]))
+ .replace(/const (uint32_t|float|unsigned) /g,'const ').replace(/size_t i/g,'let i').replace(/unsigned (i|k)/g,'let $1')
  .replace('float bands[3] = {}, peak = 0;','let bands=[0,0,0],peak=0;')
- .replace(/for \(float &value : spectrumSum\) value = 0;/g,'spectrumSum.fill(0);').replace(/SpectrumAnalysis::/g,'SpectrumAnalysis.');}
-const service=source.match(/void serviceMicrophoneSpectrum\(\) \{([\s\S]*?)\n\}/)[1];
+ .replace(/for \(float &value : spectrumSum\)\s+value = 0;/g,'spectrumSum.fill(0);').replace(/SpectrumAnalysis::/g,'SpectrumAnalysis.');}
+const service=source.match(/void serviceMicrophoneSpectrum\(const AudioBlock &block\) \{([\s\S]*?)\n\}/)[1];
 const reset=source.match(/void resetSpectrumWindow\(\) \{([\s\S]*?)\n\}/)[1];
 function fixture(interval){
  const c={AUDIO_SPECTRUM_AVERAGE_MS:interval,clock:0,microphoneReady:true,microphonePaused:false,microphoneOverflows:0,spectrumLastOverflow:0,

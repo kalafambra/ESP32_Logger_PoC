@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const source = fs.readFileSync(path.join(__dirname, '..', 'dashboard.h'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '..', 'web_assets.cpp'), 'utf8');
 const script = source.match(/<script>([\s\S]*?)<\/script>/)[1];
 new vm.Script(script);
 const elements = new Map(), strokes = [], paths = [];

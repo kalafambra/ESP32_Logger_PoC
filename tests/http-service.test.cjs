@@ -1,5 +1,5 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
-const source=fs.readFileSync(path.join(__dirname,'..','http_service.h'),'utf8');
+const source=fs.readFileSync(path.join(__dirname,'..','http_api.cpp'),'utf8');
 const body=source.match(/void serviceHttpClients\(WebServer &http\) \{([\s\S]*?)\n\}/)[1]
  .replace(/  static [^\n]+\n/g,'').replace('auto client','const client').replace('const uint32_t now','const now');
 const c={waiting:false,waitingSince:0,clock:0,handled:0,stopped:0,bytes:0,connected:true,

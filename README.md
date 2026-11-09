@@ -10,7 +10,7 @@ MPU6050, INMP441 audio spectrum, serial diagnostics and password-protected Ardui
 | BME280 | 5 Hz (every 200 ms) | 1 Hz: mean/min/max of exactly five readings |
 | MPU6050 | 100 Hz, interrupt + FIFO | 1 Hz: mean XYZ, plus min/max in the API |
 | MPU6050 chip temperature | 1 Hz, direct temperature-register read | 1 Hz, on the shared temperature graph |
-| INMP441 microphone | 16 kHz, hardware I2S + DMA | About 1 Hz: averaged 1024-point spectrum and band levels |
+| INMP441 microphone | 16 kHz, hardware I2S + DMA | About 1 Hz: averaged 256-point spectrum and band levels |
 
 Dashboard sensor endpoints are polled once per second, with no overlapping
 requests within a polling stream. Motion includes gravity. All graphs retain
@@ -34,23 +34,61 @@ history rows include `mpu_temperature_c`. Serial motion reports include chip T.
 
 ## Files
 
-- ESP32_1.ino: BME acquisition/publication, Wi-Fi, OTA and HTTP routes.
-- motion.h: MPU6050 configuration, ISR, FIFO draining, aggregates and motion API.
-- microphone.h: INMP441 I2S master RX, DMA capture and OTA pause/resume.
-- spectrum_analysis.h: fixed-size Hann FFT and digital power normalization.
-- audio_config.h: shared FFT size, sample frequency and power-averaging interval.
-- microphone_spectrum.h: audio frame aggregation and spectrum API.
-- http_service.h: cooperative HTTP handling with a one-second idle-client deadline.
-- aggregation.h: BME channel means and extrema.
-- config.h: private Wi-Fi/OTA credentials, altitude and GPIO settings; ignored by Git.
-- config.example.h: shareable configuration with placeholder credentials.
-- dashboard.h: embedded HTML/CSS/JavaScript; no internet dependencies.
-- fox.png and fox_image.h: archived image assets, no longer embedded or served by the firmware.
-- scripts/embed_fox.py: regenerate the PNG header after replacing fox.png.
-- scripts/quantize_fox.py: 16-color conversion (Pillow), preserving source dimensions and alpha values.
-- environment_history.h: bounded one-second / 30-second environmental history and its self-tests.
-- scripts/upload_ota.py: authenticated uploader wrapper; reads password from config.h.
-- tests/dashboard.test.cjs: simulated DOM/canvas tests, run with Node.js.
+All firmware sources stay at the sketch root so Arduino compiles the `.cpp` files
+automatically. Headers describe interfaces and data; implementations own mutable
+state in their `.cpp` files. Tiny arithmetic helpers, constants and the history
+visitor templates remain in headers.
+
+| Files | Responsibility |
+| --- | --- |
+| `ESP32_1.ino` | Hardware startup and cooperative service order |
+| `environment.h/.cpp` | BME280 forced conversions, five-sample reports, timing counters and environmental history ownership |
+| `environment_history.h/.cpp`, `aggregation.h` | Bounded one-second / 30-second history and channel statistics |
+| `motion.h/.cpp` | MPU6050 registers, ISR/FIFO, calibration, temperature, reports and diagnostic snapshots |
+| `microphone.h/.cpp` | INMP441 I2S/DMA capture, borrowed audio blocks and OTA pause/resume |
+| `spectrum_analysis.h/.cpp` | Hardware-independent Hann FFT and digital power normalization |
+| `audio_config.h`, `microphone_spectrum.h/.cpp` | Audio settings, frame feeding, power averaging and published spectrum |
+| `pickup_detector.h/.cpp` | Hardware-independent pickup state machine and thresholds |
+| `pickup_service.h/.cpp` | Detector integration, settings validation/persistence, debug subscription and exclusive LED timer |
+| `pickup_debug.h/.cpp`, `pickup_events.h/.cpp` | Leased debug history and persistent event journal |
+| `pickup_ble.h/.cpp` | Optional BLE service and callbacks using locked event snapshots |
+| `network_service.h/.cpp` | Wi-Fi callbacks/retries, time synchronization and deferred service startup |
+| `ota_service.h/.cpp` | OTA lifecycle and acquisition pause/recovery |
+| `http_api.h/.cpp` | Sole WebServer, all routes and response handling, plus the one-second idle-client deadline |
+| `web_assets.h/.cpp` | Flash-resident dashboard, tuning page and downloadable BLE UUID definitions |
+| `self_tests.h/.cpp` | Existing startup history/detector/journal checks, reusing live buffers |
+| `config.h`, `config.example.h` | Private credentials/GPIO settings and shareable example |
+
+The sketch initializes the shared Wire bus once. Wi-Fi reserves memory before
+I2S and optional BLE. Each loop drains audio before sensor work and after HTTP;
+it closes an environmental report before starting the next conversion. Keep
+these orders when adding services. OTA callbacks run through the loop service;
+the motion and LED ISRs and Wi-Fi/BLE callbacks have their own documented limits.
+Sensor reports and history are read-only views for HTTP; callers must consume
+them before the next service call. The event journal uses locked copies for
+concurrent BLE reads. NVS record formats and endpoint URLs are unchanged.
+
+Use `network_service.h`, since `network.h` would shadow the ESP32 library's
+`Network.h` on Windows. After renaming source files, clean the Arduino build
+directory or use `arduino-cli compile --clean` to remove stale copied headers.
+
+`fox.png` and `fox_image.h` remain archived, unused assets. The scripts
+`embed_fox.py` and `quantize_fox.py` maintain those assets; `upload_ota.py` reads
+the private configuration for authenticated uploads.
+
+Run the offline JavaScript regressions from the project root with Node.js:
+
+```powershell
+Get-ChildItem tests -Filter '*.test.cjs' | ForEach-Object { node $_.FullName; if ($LASTEXITCODE -ne 0) { throw $_.Name } }
+```
+
+The acquisition, DSP and DMA tests read the implementation files and translate
+selected C++ code into deterministic JavaScript fixtures. They complement a full
+Arduino compile; they do not execute the C++ binary or validate physical hardware.
+Offline Python test-suite checks use
+`python -m unittest discover -s tests -p 'test_*.py'`. The mocked browser check is
+`python tests/spectrum_browser.py`; live board checks are described separately in
+[tests/DEVICE_TESTS.md](tests/DEVICE_TESTS.md).
 
 ## Wiring
 
@@ -113,10 +151,10 @@ converts the captured words to signed 24-bit values in int32_t storage.
 `serviceMicrophoneAudio()` drains up to six queued blocks before sensor work
 and again after HTTP handling. This lets capture catch up after a slow loop
 visit while keeping the work bounded; each block enters analysis immediately.
-For future processing, consume `microphoneBlock[0..microphoneBlockCount)`
-immediately after the service call; the next call replaces the block.
-`microphoneSamples` counts delivered samples, `microphoneReady` indicates driver
-initialization and `microphoneError` records the latest driver result. A timeout
+For future processing, consume the returned `AudioBlock.samples[0..count)`
+immediately after `serviceMicrophone()`; the next call replaces the borrowed block.
+`microphoneStatus()` returns delivered sample and overflow counters, readiness,
+pause state and the latest driver result. A timeout
 is normal when no complete DMA buffer is available. Initialization is logged
 once, and failure leaves other application services running.
 
@@ -130,7 +168,7 @@ physically connected; confirm clocks and sample response on the wired device.
 Configure audio globally in `audio_config.h`, then compile and upload:
 
 ```cpp
-constexpr unsigned AUDIO_FFT_SIZE = 1024;
+constexpr unsigned AUDIO_FFT_SIZE = 256;
 constexpr uint32_t AUDIO_SAMPLE_RATE_HZ = 16000;
 constexpr uint32_t AUDIO_SPECTRUM_AVERAGE_MS = 1000;
 ```
@@ -141,7 +179,7 @@ power-of-two FFT of 128–2048 samples for this memory layout, a sample rate of
 8–48 kHz, and an averaging interval that fits at least one full frame.
 The configured rate range is a conservative subset of the timing limits in the
 [INMP441 datasheet](https://product.tdk.com/system/files/dam/doc/product/sw_piezo/mic/mems-mic/data_sheet/inmp441.pdf).
-At the defaults there are about 15–16 frames per second (not ten), each 64 ms.
+At the defaults there are about 62–63 FFT frames per second, each 16 ms.
 The API's `frames` and `averaged_audio_ms` report the actual amount averaged;
 DMA gaps reduce it. `average_target_ms` reports the requested averaging interval.
 
@@ -154,7 +192,7 @@ not increase frequency resolution, which remains sample rate divided by FFT size
 
 The dashboard's Microphone spectrum card plots 0–8 kHz on a fixed -120 to 0
 dBFS scale. The firmware removes each frame's DC mean, applies a periodic Hann
-window, and computes a 1024-point radix-2 FFT (64 ms frames, 15.625 Hz bin spacing).
+window, and computes a 256-point radix-2 FFT (16 ms frames, 62.5 Hz bin spacing).
 Nonoverlapping frames are averaged in **linear power**, then published about
 once per second at `/api/microphone`. The spectrum uses one-sided RMS power per
 bin, normalized by Hann window energy, with a -120 dBFS floor. This is not
@@ -163,7 +201,7 @@ A full-scale sine has approximately -3.01 dBFS overall RMS; its plotted energy
 spreads across neighboring bins. Broadband RMS is computed separately from
 the unwindowed, DC-removed samples.
 
-The API includes `bins_dbfs` (513 bins including DC/Nyquist), `rms_dbfs`,
+The API includes `bins_dbfs` (129 bins at the defaults, including DC/Nyquist), `rms_dbfs`,
 `peak_hz` (strongest bin above 80 Hz, not an interpolated pitch estimate),
 `bands_dbfs` (80–500, 500–2000, 2000–8000 Hz), FFT `frames`, `age_ms`,
 `clipped_samples` and cumulative `dma_overflows`. Band boundaries use bin

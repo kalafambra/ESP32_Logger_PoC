@@ -6,7 +6,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
-html = (ROOT / "dashboard.h").read_text(encoding="utf-8").split('R"DASHBOARD(', 1)[1].split(')DASHBOARD"', 1)[0]
+html = (ROOT / "web_assets.cpp").read_text(encoding="utf-8").split('R"DASHBOARD(', 1)[1].split(')DASHBOARD"', 1)[0]
 spectrum = dict(ok=True, sample_rate_hz=16000, fft_size=1024, bin_hz=15.625, bins_dbfs=[-90 + 45 * math.exp(-((i - 64) / 3) ** 2) for i in range(513)],
                 bands_dbfs=[-45, -35, -55], rms_dbfs=-33, peak_hz=1000, age_ms=10, frames=31,
                 dma_overflows=0, clipped_samples=0)

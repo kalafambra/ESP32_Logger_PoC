@@ -1,8 +1,8 @@
 // Validate the Android import artifact against the advertised firmware UUIDs.
 const fs=require('node:fs'),assert=require('node:assert/strict');
-const source=fs.readFileSync('pickup_ble.h','utf8');
+const source=fs.readFileSync('pickup_ble.cpp','utf8')+'\n'+fs.readFileSync('web_assets.cpp','utf8');
 const definitions=JSON.parse(source.match(/R"NAMES\(([\s\S]*?)\)NAMES"/)[1]);
-const uuid=name=>source.match(new RegExp(name+'\\[\\]="([^"]+)"'))[1].replaceAll('-','').toUpperCase();
+const uuid=name=>source.match(new RegExp(name+'\\[\\] = "([^"]+)"'))[1].replaceAll('-','').toUpperCase();
 assert.equal(definitions.uuid128bitServiceDefinitions[uuid('PICKUP_SERVICE_UUID')].name,'Pickup lists');
 assert.deepEqual(definitions.uuid128bitCharacteristicDefinitions[uuid('PICKUP_LIST_UUID')],{name:'Pickup lists',format:'TEXT'});
 assert.equal(Object.keys(definitions.uuid128bitCharacteristicDefinitions).length,1);

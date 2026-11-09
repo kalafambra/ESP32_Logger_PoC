@@ -1,11 +1,11 @@
-// Execute the sketch's acquisition decisions with deterministic sensor/time
+// Execute the environmental module's acquisition decisions with deterministic sensor/time
 // stubs. Only C++ type syntax and the status byte reference need translation;
 // the deadline and conversion branches come directly from the firmware.
 const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const source = fs.readFileSync(path.join(__dirname, '..', 'ESP32_1.ino'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '..', 'environment.cpp'), 'utf8');
 let body = source.match(/void acquireSensor\(\) \{([\s\S]*?)\n\}/)[1]
   .replace(/const (uint32_t|float) /g, 'const ')
   .replace('const slots = (now - lastStart) / SAMPLE_INTERVAL_MS;',

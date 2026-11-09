@@ -8,10 +8,11 @@ not an absolute height/contact detector. Very gentle straight lifts may be misse
 ## Files
 
 - pickup_detector.h: hardware-independent state machine, statistics and filtering.
-- pickup_io.h: persistent settings, API validation, status and exclusive LED timer.
-- pickup_selftest.h: deterministic tests of the real state machine at startup.
-- motion.h: supplies calibrated acceleration plus gyro on every 100 Hz FIFO frame.
-- dashboard.h: pickup alert and runtime settings form with firmware-provided limits.
+- pickup_service.h/.cpp: persistent settings, validation, status and exclusive LED timer.
+- self_tests.h/.cpp: deterministic tests of the real state machine at startup.
+- motion.h/.cpp: supplies calibrated acceleration plus gyro on every 100 Hz FIFO frame.
+- http_api.h/.cpp: HTTP handlers, settings form parsing and response formatting.
+- web_assets.h/.cpp: pickup alert and runtime settings form with firmware-provided limits.
 
 ## Flow
 
@@ -106,7 +107,7 @@ rather than arbitrarily reducing trigger sensitivity.
 
 ## LED ownership
 
-Acquisition and OTA callbacks no longer write the LED. Only pickup_io.h owns its
+Acquisition and OTA callbacks no longer write the LED. Only pickup_service.cpp owns its
 initialization and output. A hardware timer drives a short 10 ms ISR, allowing
 the configured blink to continue during OTA and NVS operations. Default output
 is exactly 500 ms ON / 500 ms OFF while alerting, otherwise OFF. Custom duty
@@ -217,8 +218,9 @@ on reboot. Time is ESP32 processing uptime: FIFO delivery batching can shift
 feature timing relative to when physical samples were generated. The gap chart
 shows delivery timing, not the MPU's fixed 10 ms sample period.
 
-Files: pickup_tuning.h contains the page; pickup_debug.h contains bounded
-capture/serialization. pickup_io.h integrates subscription and settings revision.
+Files: web_assets.cpp contains the page; pickup_debug.h/.cpp contains bounded
+capture/serialization. pickup_service.h/.cpp integrates subscription and settings
+revision; http_api.cpp owns the debug and settings routes.
 The core now refreshes diagnostic features even while alerting, preserves the
 confirming trigger-persistence value for capture, and flags skipped RMS updates.
 The existing detector thresholds and decision logic are unchanged. Startup
