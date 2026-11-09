@@ -14,6 +14,9 @@
 #include "pickup_tuning.h"
 #include "motion.h"
 #include "pickup_ble.h"
+#include "microphone.h"
+#include "microphone_spectrum.h"
+#include "http_service.h"
 
 Adafruit_BME280 bme;
 WebServer server(80);
@@ -63,6 +66,7 @@ void wifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
  * Explicit status checks avoid treating a missing device as a valid reading.
  */
 bool readRegisters(uint8_t reg, uint8_t *data, uint8_t count) {
+  if (!I2C_SENSORS_ENABLED) return false;
   Wire.beginTransmission(sensorAddress);
   Wire.write(reg); // Select the first register before switching to a read.
   // A repeated start keeps register selection and reading in one transaction.
@@ -78,6 +82,7 @@ bool readRegisters(uint8_t reg, uint8_t *data, uint8_t count) {
  * without using the library helper that waits for conversion completion.
  */
 bool writeRegister(uint8_t reg, uint8_t value) {
+  if (!I2C_SENSORS_ENABLED) return false;
   Wire.beginTransmission(sensorAddress);
   Wire.write(reg);
   Wire.write(value);
@@ -172,6 +177,7 @@ void acquireSensor() {
  * Include network status even in error reports to support remote diagnosis.
  */
 void publishWindow(uint32_t now) {
+  if (!I2C_SENSORS_ENABLED) return;
   if (now - windowStart < PUBLISH_INTERVAL_MS) return;
   const uint32_t elapsedWindows = (now - windowStart) / PUBLISH_INTERVAL_MS;
   // Slots never reached before the boundary are lost, not filled in later.
@@ -248,6 +254,7 @@ void sendReadings() {
   json.reserve(2600+environmentHistory.selected(since,now)*272); // Includes the second temperature trace.
   json = "{\"sequence\":" + String(latest.sequence);
   json += ",\"uptime_ms\":" + String(now);
+  json += ",\"i2c_enabled\":" + String(I2C_SENSORS_ENABLED ? "true" : "false");
   json += ",\"history_mode\":\"tiered_30s\",\"history_recent_ms\":30000,\"history_coarse_ms\":30000";
   json += ",\"history_self_tests_passed\":"+String(environmentHistoryTestsPassed?"true":"false");
   json += ",\"default_altitude_m\":" + String(DEFAULT_ALTITUDE_M, 2);
@@ -309,6 +316,8 @@ void setup() {
     /* Pause sensor acquisition; the pickup LED's timer remains independent. */
     ArduinoOTA.onStart([]() {
       pauseMotion(); // Stop the FIFO while OTA temporarily owns loop execution.
+      pauseMicrophone();
+      resetSpectrumWindow();
       Serial.println("[ota] Update starting; measurement and dashboard handling paused");
     });
     /* Log coarse progress so serial output does not dominate update processing. */
@@ -327,6 +336,8 @@ void setup() {
     /* Diagnose upload failures and discard samples spanning an interrupted update. */
     ArduinoOTA.onError([](ota_error_t error) {
       resumeMotion(); // Reset FIFO framing before collecting post-update samples.
+      resumeMicrophone();
+      resetSpectrumWindow();
       const char *reason = error == OTA_AUTH_ERROR ? "authentication failed" :
                            error == OTA_BEGIN_ERROR ? "cannot begin update (partition/space)" :
                            error == OTA_CONNECT_ERROR ? "connection failed" :
@@ -344,36 +355,45 @@ void setup() {
   } else {
     Serial.println("[ota] Disabled: set OTA_PASSWORD to at least 12 characters in config.h");
   }
-  Wire.begin(SDA_PIN, SCL_PIN);
-  Wire.setClock(100000); // Lower rates fit standard-mode I2C, with more wiring margin.
-  Wire.setTimeOut(20);  // Bound I2C failures; I/O itself is synchronous.
-  // Breakouts use either address depending on their SDO wiring.
-  for (uint8_t address : {uint8_t(0x76), uint8_t(0x77)}) {
-    if (bme.begin(address, &Wire)) {
-      sensorAddress = address;
-      sensorReady = true;
-      break;
+  if (I2C_SENSORS_ENABLED) {
+    Wire.begin(SDA_PIN, SCL_PIN);
+    Wire.setClock(100000); // Lower rates fit standard-mode I2C, with more wiring margin.
+    Wire.setTimeOut(20);  // Bound I2C failures; I/O itself is synchronous.
+    // Breakouts use either address depending on their SDO wiring.
+    for (uint8_t address : {uint8_t(0x76), uint8_t(0x77)}) {
+      if (bme.begin(address, &Wire)) {
+        sensorAddress = address;
+        sensorReady = true;
+        break;
+      }
     }
-  }
-  if (sensorReady) {
-    // Sleep between x1 conversions; acquireSensor() explicitly starts each sample.
-    bme.setSampling(Adafruit_BME280::MODE_SLEEP,
-                    Adafruit_BME280::SAMPLING_X1,
-                    Adafruit_BME280::SAMPLING_X1,
-                    Adafruit_BME280::SAMPLING_X1,
-                    Adafruit_BME280::FILTER_OFF);
-    sensorError = "Waiting for first sample";
-    Serial.printf("[sensor] BME280 at 0x%02X\n", sensorAddress);
+    if (sensorReady) {
+      // Sleep between x1 conversions; acquireSensor() explicitly starts each sample.
+      bme.setSampling(Adafruit_BME280::MODE_SLEEP,
+                      Adafruit_BME280::SAMPLING_X1,
+                      Adafruit_BME280::SAMPLING_X1,
+                      Adafruit_BME280::SAMPLING_X1,
+                      Adafruit_BME280::FILTER_OFF);
+      sensorError = "Waiting for first sample";
+      Serial.printf("[sensor] BME280 at 0x%02X\n", sensorAddress);
+    } else {
+      sensorError = "BME280 not found at 0x76 or 0x77; check wiring and reset";
+      Serial.printf("[sensor] %s\n", sensorError);
+    }
+    setupMotion(); // Both sensors share GPIO21/GPIO22, with different I2C addresses.
+    Wire.setClock(100000); // Reassert standard-mode speed after sensor initialization helpers.
   } else {
-    sensorError = "BME280 not found at 0x76 or 0x77; check wiring and reset";
-    Serial.printf("[sensor] %s\n", sensorError);
+    sensorReady = motionReady = false;
+    sensorError = motionError = motionTemperatureError = "I2C sensors disabled in microphone build";
+    latest.error = sensorError;
+    invalidatePickup("I2C sensors disabled in microphone build");
+    Serial.println("[sensors] Microphone build: I2C bus, BME280, MPU6050 and MPU interrupt disabled");
   }
-  setupMotion(); // Both sensors share GPIO21/GPIO22, with different I2C addresses.
-  Wire.setClock(100000); // Reassert standard-mode speed after sensor initialization helpers.
   windowStart = millis();
   lastStart = windowStart - SAMPLE_INTERVAL_MS;
   WiFi.onEvent(wifiEvent);
   wifiDriverReady=WiFi.mode(WIFI_STA); // Reserve Wi-Fi task/queue memory before optional BLE/history.
+  if(wifiDriverReady)WiFi.setSleep(false); // Favor dashboard latency on this continuously sampling device.
   // One application-owned retry policy avoids racing automatic reconnect.
   WiFi.setAutoReconnect(false);
   if(wifiDriverReady){
@@ -381,12 +401,14 @@ void setup() {
     Serial.println("[wifi] Connecting to configured 2.4 GHz network");
   }else Serial.println("[wifi] Driver initialization failed; retry scheduled, HTTP not started");
   lastReconnect = millis();
+  setupMicrophone(); // Wi-Fi reserves memory first; I2S uses its own pins and DMA.
   /* Serve the embedded page from flash so the dashboard needs no filesystem/internet. */
   server.on("/", HTTP_GET, []() {
     server.sendHeader("Cache-Control", "no-store");
     server.send_P(200, "text/html; charset=utf-8", DASHBOARD_HTML);
   });
   server.on("/api/readings", HTTP_GET, sendReadings);
+  server.on("/api/microphone", HTTP_GET, sendMicrophoneSpectrum);
   server.on("/api/motion", HTTP_GET, sendMotionReadings);
   server.on("/api/motion/diagnostics", HTTP_GET, sendMotionDiagnostics);
   server.on("/api/motion/calibrate", HTTP_POST, startMotionCalibration);
@@ -437,11 +459,14 @@ void startOptionalServices(){
  */
 void loop() {
   if (otaStarted) ArduinoOTA.handle();
+  serviceMicrophoneAudio(); // Drain queued DMA before synchronous sensor work.
   // Close the old window before a new conversion can enter the next window.
   publishWindow(millis());
   acquireSensor();
   acquireMotion(); // Drain FIFO and publish independent one-second motion reports.
-  if(httpStarted)server.handleClient();
+  if(httpStarted)serviceHttpClients(server);
+  serviceMicrophoneAudio(); // Catch up with audio produced during I2C/HTTP handling.
+  logMicrophoneDiagnostics(); // Low-rate serial evidence independent of HTTP delivery.
   acquireMotion(); // Service data accumulated while a synchronous client was handled.
   const uint32_t now = millis();
   servicePickup(now); // The only feature allowed to request LED changes.
@@ -474,7 +499,7 @@ void loop() {
     wifiRestartPending = false;
   } else if(!wifiDriverReady&&now-lastReconnect>=WIFI_ATTEMPT_MS){
     lastReconnect=now;wifiDriverReady=WiFi.mode(WIFI_STA);
-    if(wifiDriverReady)WiFi.begin(WIFI_SSID,WIFI_PASSWORD);
+    if(wifiDriverReady){WiFi.setSleep(false);WiFi.begin(WIFI_SSID,WIFI_PASSWORD);}
     else Serial.println("[wifi] Driver still unavailable; retry in 30 s");
   } else if (wifiDriverReady&&!wifiRestartPending && now - lastReconnect >= WIFI_ATTEMPT_MS) {
     // Cancel the old association/DHCP attempt before starting another.

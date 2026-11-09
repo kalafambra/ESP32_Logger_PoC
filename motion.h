@@ -62,17 +62,23 @@ void ARDUINO_ISR_ATTR motionDataReadyISR() {
   portEXIT_CRITICAL_ISR(&motionMux);
 }
 
-/* Keep register reads on the shared bus in normal task context, checking short replies. */
+/* Keep register reads on the shared bus in normal task context, checking short replies.
+ * Use STOP between register selection and read: the MPU retains its register
+ * pointer. This avoids the combined transmit/receive path that panicked in the
+ * installed ESP32 I2C driver during repeated FIFO read failures on this board.
+ */
 bool motionRead(uint8_t reg, uint8_t *data, uint8_t count) {
+  if (!I2C_SENSORS_ENABLED) return false;
   Wire.beginTransmission(MPU_ADDRESS);
   Wire.write(reg);
-  if (Wire.endTransmission(false) != 0 || Wire.requestFrom(MPU_ADDRESS, count) != count) return false;
+  if (Wire.endTransmission(true) != 0 || Wire.requestFrom(MPU_ADDRESS, count) != count) return false;
   for (uint8_t i = 0; i < count; ++i) data[i] = Wire.read();
   return true;
 }
 
 /* One direct two-byte read per environmental report leaves the 12-byte motion FIFO layout intact. */
 void acquireMotionTemperature(uint32_t now){
+  if (!I2C_SENSORS_ENABLED) return;
   motionTemperatureMs=now;motionTemperatureOk=false;
   if(!motionReady||motionPaused||!motionSettled){motionTemperatureError="MPU6050 temperature unavailable";return;}
   uint8_t raw[2];
@@ -83,6 +89,7 @@ void acquireMotionTemperature(uint32_t now){
 
 /* Acknowledge each configuration write rather than silently using unknown sensor settings. */
 bool motionWrite(uint8_t reg, uint8_t value) {
+  if (!I2C_SENSORS_ENABLED) return false;
   Wire.beginTransmission(MPU_ADDRESS);
   Wire.write(reg);
   Wire.write(value);
@@ -131,6 +138,7 @@ bool verifyMotionConfiguration() {
 
 /* Configure 100 Hz acceleration acquisition, using FIFO to absorb brief loop delays. */
 void setupMotion() {
+  if (!I2C_SENSORS_ENABLED) return;
   uint8_t identity = 0;
   pinMode(MPU_INTERRUPT_PIN, INPUT_PULLDOWN); // INT is configured as active-high push-pull.
   attachInterrupt(digitalPinToInterrupt(MPU_INTERRUPT_PIN), motionDataReadyISR, RISING);
@@ -296,6 +304,7 @@ void publishMotion(uint32_t now) {
 
 /* Drain bounded FIFO batches on notification, with a 5 ms safety poll for missed IRQ wiring. */
 void acquireMotion() {
+  if (!I2C_SENSORS_ENABLED) return;
   if (motionPaused) return;
   const uint32_t now = millis();
   // Discard sensor startup samples rather than mixing the settling period into a valid mean.
@@ -426,6 +435,11 @@ void sendMotionReadings() {
 
 /* Compare direct sensor registers with FIFO output without changing scale, offsets or gravity. */
 void sendMotionDiagnostics() {
+  if (!I2C_SENSORS_ENABLED) {
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(503, "application/json", "{\"ok\":false,\"error\":\"I2C sensors disabled in microphone build\"}");
+    return;
+  }
   uint8_t raw[6], range = 0;
   const bool ok = motionRead(0x1C, &range, 1) && motionRead(0x3B, raw, sizeof(raw));
   String json = "{\"ok\":"; json += ok ? "true" : "false";

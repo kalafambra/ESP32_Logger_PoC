@@ -1,7 +1,7 @@
 ﻿# ESP32 environmental and motion monitor
 
 ESP32-WROOM Arduino firmware with an offline dark slate dashboard, BME280,
-MPU6050, serial diagnostics and password-protected ArduinoOTA.
+MPU6050, INMP441 audio spectrum, serial diagnostics and password-protected ArduinoOTA.
 
 ## Current acquisition and publication rates
 
@@ -10,8 +10,9 @@ MPU6050, serial diagnostics and password-protected ArduinoOTA.
 | BME280 | 5 Hz (every 200 ms) | 1 Hz: mean/min/max of exactly five readings |
 | MPU6050 | 100 Hz, interrupt + FIFO | 1 Hz: mean XYZ, plus min/max in the API |
 | MPU6050 chip temperature | 1 Hz, direct temperature-register read | 1 Hz, on the shared temperature graph |
+| INMP441 microphone | 16 kHz, hardware I2S + DMA | About 1 Hz: averaged 1024-point spectrum and band levels |
 
-Both dashboard endpoints are polled once per second, with no overlapping
+Dashboard sensor endpoints are polled once per second, with no overlapping
 requests within a polling stream. Motion includes gravity. All graphs retain
 up to 600 seconds in the browser, expanding to fill their width when history
 is shorter. Environmental extrema remain at 30% opacity. Motion plots mean
@@ -35,6 +36,11 @@ history rows include `mpu_temperature_c`. Serial motion reports include chip T.
 
 - ESP32_1.ino: BME acquisition/publication, Wi-Fi, OTA and HTTP routes.
 - motion.h: MPU6050 configuration, ISR, FIFO draining, aggregates and motion API.
+- microphone.h: INMP441 I2S master RX, DMA capture and OTA pause/resume.
+- spectrum_analysis.h: fixed-size Hann FFT and digital power normalization.
+- audio_config.h: shared FFT size, sample frequency and power-averaging interval.
+- microphone_spectrum.h: audio frame aggregation and spectrum API.
+- http_service.h: cooperative HTTP handling with a one-second idle-client deadline.
 - aggregation.h: BME channel means and extrema.
 - config.h: private Wi-Fi/OTA credentials, altitude and GPIO settings; ignored by Git.
 - config.example.h: shareable configuration with placeholder credentials.
@@ -59,6 +65,11 @@ Power down before changing wiring. Both sensors share one I2C bus.
 | MPU6050 AD0 | GND, selecting 0x68 |
 | MPU6050 INT | GPIO17 / D17 |
 | User LED | GPIO2, active HIGH by default |
+| INMP441 SCK (BCLK) | GPIO18 |
+| INMP441 WS (LRCLK) | GPIO19 |
+| INMP441 SD (data into ESP32) | GPIO23 |
+| INMP441 VDD / GND | 3V3 / GND |
+| INMP441 L/R | GND (left channel) |
 
 Leave MPU XDA/XCL unused. INT is active-high, push-pull and latched until status
 is read. Do not leave AD0 floating. Use 3.3 V I2C logic and pull-ups, even if a
@@ -68,6 +79,155 @@ boards have another LED pin/polarity or only a power LED; configure accordingly.
 
 The bus runs at **100 kHz**. This is sufficient for the reduced acquisition rate
 and gives more wiring margin than the former 400 kHz setting. The LED is reserved exclusively for pickup detection; acquisition no longer drives it.
+
+### INMP441 capture
+
+The current **microphone build** sets `I2C_SENSORS_ENABLED = false` in config.h
+and config.example.h. It never starts Wire, initializes BME280/MPU6050, or attaches
+the MPU interrupt. Low-level register helpers also reject calls without touching
+Wire, including calls from diagnostics and OTA recovery. Environmental/motion
+APIs explicitly report disabled sensors; the dashboard stops their periodic
+polling once the mode is received and continues polling audio. Wi-Fi, OTA, BLE
+event access and all GPIO assignments remain available. Motion-based pickup
+detection is unavailable while its sensor is disabled.
+
+Set the flag to `true` and rebuild to restore the combined sensor firmware.
+Do not change wiring or GPIO assignments to switch build modes.
+
+The microphone uses the ESP32 hardware I2S0 peripheral as master/receiver,
+independently of Wire and the MPU interrupt. The INMP441 is the clock slave
+and audio transmitter. `MICROPHONE_BCLK_PIN`, `MICROPHONE_WS_PIN` and
+`MICROPHONE_DATA_PIN` are defined in both config.h and config.example.h.
+When upgrading an existing private config.h, add those constants as 18, 19 and 23.
+Existing sensor, interrupt and LED pins keep their assignments.
+
+Capture uses the ESP32 core's standard I2S driver (Arduino-ESP32 3.x), with
+16 kHz Philips I2S, 32-bit slots and only the left slot delivered to the application.
+Each stereo clock frame has 64 bit clocks (1.024 MHz BCLK, 16 kHz WS);
+the microphone's signed 24-bit sample occupies the upper 24 bits of its slot.
+Six 256-frame DMA buffers provide about 96 ms of buffering using 6 KiB of
+sample storage, plus driver overhead. No extra microphone library is needed.
+
+`serviceMicrophone()` makes one nonblocking read of at most 256 samples and
+converts the captured words to signed 24-bit values in int32_t storage.
+`serviceMicrophoneAudio()` drains up to six queued blocks before sensor work
+and again after HTTP handling. This lets capture catch up after a slow loop
+visit while keeping the work bounded; each block enters analysis immediately.
+For future processing, consume `microphoneBlock[0..microphoneBlockCount)`
+immediately after the service call; the next call replaces the block.
+`microphoneSamples` counts delivered samples, `microphoneReady` indicates driver
+initialization and `microphoneError` records the latest driver result. A timeout
+is normal when no complete DMA buffer is available. Initialization is logged
+once, and failure leaves other application services running.
+
+DMA is paused during OTA and resumed after a failed
+update. Long loop stalls beyond the DMA capacity can lose audio; this is not a
+lossless recorder. Driver initialization cannot verify that the microphone is
+physically connected; confirm clocks and sample response on the wired device.
+
+### Live spectrum and box comparison
+
+Configure audio globally in `audio_config.h`, then compile and upload:
+
+```cpp
+constexpr unsigned AUDIO_FFT_SIZE = 1024;
+constexpr uint32_t AUDIO_SAMPLE_RATE_HZ = 16000;
+constexpr uint32_t AUDIO_SPECTRUM_AVERAGE_MS = 1000;
+```
+
+Capture clocks, FFT frequency conversion, API metadata, dashboard frequency
+axis and band labels follow these settings. Compile-time checks require a
+power-of-two FFT of 128–2048 samples for this memory layout, a sample rate of
+8–48 kHz, and an averaging interval that fits at least one full frame.
+The configured rate range is a conservative subset of the timing limits in the
+[INMP441 datasheet](https://product.tdk.com/system/files/dam/doc/product/sw_piezo/mic/mems-mic/data_sheet/inmp441.pdf).
+At the defaults there are about 15–16 frames per second (not ten), each 64 ms.
+The API's `frames` and `averaged_audio_ms` report the actual amount averaged;
+DMA gaps reduce it. `average_target_ms` reports the requested averaging interval.
+
+Each complete frame is DC-removed, Hann-windowed and transformed, then its
+**linear bin powers** are averaged across the interval before conversion to dB.
+Averaging raw sample windows before a single FFT is coherent waveform averaging:
+opposite-phase sounds cancel, so it is unsuitable for ambient-noise/box tests.
+Power averaging smooths variation without requiring phase alignment; it does
+not increase frequency resolution, which remains sample rate divided by FFT size.
+
+The dashboard's Microphone spectrum card plots 0–8 kHz on a fixed -120 to 0
+dBFS scale. The firmware removes each frame's DC mean, applies a periodic Hann
+window, and computes a 1024-point radix-2 FFT (64 ms frames, 15.625 Hz bin spacing).
+Nonoverlapping frames are averaged in **linear power**, then published about
+once per second at `/api/microphone`. The spectrum uses one-sided RMS power per
+bin, normalized by Hann window energy, with a -120 dBFS floor. This is not
+power per Hz, calibrated dB SPL, or an amplitude-corrected peak-tone plot.
+A full-scale sine has approximately -3.01 dBFS overall RMS; its plotted energy
+spreads across neighboring bins. Broadband RMS is computed separately from
+the unwindowed, DC-removed samples.
+
+The API includes `bins_dbfs` (513 bins including DC/Nyquist), `rms_dbfs`,
+`peak_hz` (strongest bin above 80 Hz, not an interpolated pitch estimate),
+`bands_dbfs` (80–500, 500–2000, 2000–8000 Hz), FFT `frames`, `age_ms`,
+`clipped_samples` and cumulative `dma_overflows`. Band boundaries use bin
+centers. Summed band powers and overall RMS have different bandwidths.
+FFT size/bin spacing in the API are derived from `SpectrumAnalysis::SIZE` and
+the sample rate. The dashboard validates that metadata, displays the actual
+resolution, and clears a saved reference if the FFT configuration changes.
+Known DMA gaps discard the partial FFT frame; already completed frames remain
+in the average. Clipping and gaps are visible in the card. No raw audio is sent
+or stored. FFT storage is fixed; no additional audio task or library is used.
+The Hann table stores only its symmetric half and power output reuses FFT
+scratch storage, preserving heap for the existing radio services.
+Browser polling has independent timeout/error handling and clears stale live
+data after 2.5 seconds. A failed request preserves the last reading only while
+it remains fresh; retries use a one-second cadence that includes request time.
+Periodic environmental, motion and spectrum requests share a browser-side queue,
+including body reads, to avoid competing for the ESP32's single HTTP handler.
+Request timeouts start when each queued request actually begins. Wi-Fi modem
+sleep is disabled to favor dashboard response latency over power savings.
+Accepted HTTP connections that supply no request bytes are closed after one
+second instead of occupying the single-client server for its five-second default.
+This does not shorten active body handling or ArduinoOTA transfers.
+`audio_samples` and `dma_capacity_ms` expose capture progress and buffer capacity.
+OTA invalidates the interrupted analysis window.
+The stale limit follows the averaging interval (twice its duration plus 500 ms;
+2.5 seconds with the defaults).
+Five-second `[audio]` serial logs include sequence/age, FFT frame count, total
+samples, DMA overflows, Wi-Fi RSSI and heap, so capture can be checked even when
+network delivery fails.
+
+Serial diagnosis of the spectrum dropouts also captured repeated CPU panics
+inside the installed ESP32 I2C driver's combined transmit/receive operation
+called by MPU6050 FIFO reads. `motionRead()` now completes register selection
+with STOP before starting the read, using the MPU's retained register pointer.
+NACKs and short replies still invalidate the motion report. The shared I2C
+pins, 100 kHz clock, interrupt wiring and FIFO format are unchanged. Test the
+transaction/error handling with `node tests/motion-read.test.cjs`.
+
+For an initial exposed/boxed comparison:
+
+1. Play steady broadband noise from a fixed external sound source. Keep its
+   volume, distance and orientation unchanged throughout the comparison.
+2. Leave the microphone exposed and wait for stable spectrum readings. Click
+   **Save exposed reference** to freeze the latest one-second spectrum in this tab.
+3. Place the microphone in the box and let the readings settle. Blue is live;
+   amber is the exposed reference. Compare overall and low/mid/high band changes
+   in dB; negative changes mean less received sound in that band.
+4. Repeat open/closed trials in the same setup. The reference is cleared by
+   reloading the tab or selecting **Clear reference**.
+
+This is a measurement tool, not an automatic covered/uncovered detector.
+Room noise, source movement and the box's resonances also change the spectrum.
+Silence alone cannot distinguish an enclosed microphone from a quiet room or
+missing microphone data. Thresholds need representative repeated measurements
+before they can support a coverage decision.
+
+DSP checks: `node tests/spectrum.test.cjs`; DMA scheduling checks:
+`node tests/audio-drain.test.cjs`; dashboard/reference checks:
+`node tests/dashboard.test.cjs`. The DSP test translates C++ declarations and
+executes the firmware's FFT loops with synthetic signals; device timing and
+physical audio response still require hardware validation.
+With the device-test Python environment and Google Chrome installed, run
+`python tests/spectrum_browser.py` for a mocked desktop/mobile browser check;
+screenshots are written to ignored `test-results/spectrum-*.png` files.
 
 ## Arduino IDE setup and initial USB upload
 

@@ -36,6 +36,17 @@ small{color:#94a3b4}footer{margin:24px 0;color:#94a3b4;font-size:.8rem;line-heig
 <article><h2>Relative humidity</h2><span class="value" id="humidity">—</span> <span class="unit">%</span><canvas id="humChart" role="img" aria-label="Relative humidity in percent over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
 <article><h2>Estimated sea-level pressure</h2><span class="value" id="pressure">—</span> <span class="unit">hPa</span><canvas id="pressureChart" role="img" aria-label="Sea-level pressure over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
 <article><h2>MPU6050 acceleration</h2><p id="motionValues">Waiting for motion sensor</p><p><strong>Gyroscope</strong><br><span id="gyroValues">Waiting for motion sensor</span><br><small>One-second mean · saved zero-rate bias corrected · deg/s</small></p><button id="gyroCalibrate" type="button">Calibrate gyro (keep stationary)</button><p id="motionError" role="status"></p><button id="motionCalibrate" type="button" style="padding:10px 14px;border:1px solid #46566a;border-radius:9px;background:#253344;color:#e4e9ef;font:inherit;cursor:pointer">Calibrate flat (Z up)</button><p id="motionCalibrationStatus" role="status">Calibration removes fixed bias; gravity is retained.</p><small><span style="color:#8db4d6">X</span> · <span style="color:#86b8ad">Y</span> · <span style="color:#c9b789">Z</span> · m/s², includes gravity · one-second means · 100 Hz acquisition target</small><canvas id="motionChart" role="img" aria-label="MPU6050 X Y Z acceleration in meters per second squared"></canvas><small>Time relative to now (seconds)</small></article>
+<article><h2>Microphone spectrum</h2>
+<p id="spectrumStatus" role="status">Waiting for microphone</p>
+<p id="spectrumValues">No audio measurements yet</p>
+<canvas id="spectrumChart" role="img" aria-label="Live microphone spectrum from zero to eight kilohertz in digital decibels, with optional exposed reference"></canvas>
+<small>Frequency (Hz) · RMS power per FFT bin (dBFS) · fixed scale -120 to 0 dBFS · blue: live · amber: reference</small>
+<p id="spectrumBands"></p>
+<button id="spectrumSave" type="button" disabled>Save exposed reference</button>
+<button id="spectrumClear" type="button" disabled>Clear reference</button>
+<p id="spectrumComparison" role="status">For a useful comparison, play the same steady broadband sound at the same volume and distance, then cover the microphone. A quieter room alone can also lower these levels.</p>
+<small id="spectrumResolution">Mono Hann FFT · power averaged over about one second. Relative digital levels, not calibrated dB SPL. Reference stays in this tab until cleared or reloaded. No audio recordings are transmitted.</small>
+</article>
 </main>
 <footer>Environmental history: latest 30 seconds at 1 Hz; older data averaged into 30-second buckets, up to 600 seconds. The newest older bucket may be partial. Faint lines retain minima/maxima. Shorter histories fill the graph width; gaps indicate unavailable reports. Motion keeps its own one-second history. Altitude adjusts pressure in this tab; reload restores the configured altitude. No internet services required.</footer>
 <script>
@@ -44,8 +55,21 @@ const history=[],motionHistory=[];
 let lastMotionSequence=null;
 const charts=[['tempChart','t','#8db4d6','°C'],['humChart','h','#86b8ad','%'],['pressureChart','p','#c9b789','hPa'],['motionChart','a','#8db4d6','m/s²']];
 let lastSequence=null,lastUptime=null,lastSuccess=0;
+let i2cSensorsEnabled=true;
 let altitudeM=0,altitudeInitialized=false,currentReading=null;
 const $=id=>document.getElementById(id);
+// The ESP32 serves one HTTP client at a time. Keep periodic requests in one
+// queue, including reading each body, rather than filling TCP slots in parallel.
+let dashboardRequest=Promise.resolve();
+function requestDashboardJson(url,timeoutMs=2000){
+ const run=async()=>{
+  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),timeoutMs);
+  try{const response=await fetch(url,{cache:'no-store',signal:controller.signal});if(!response.ok)throw new Error('HTTP '+response.status);return await response.json();}
+  finally{clearTimeout(timeout);}
+ };
+ const result=dashboardRequest.then(run,run);
+ dashboardRequest=result.catch(()=>{});return result;
+}
 /* Clear derived fields too, so a network/sensor error cannot leave plausible stale values. */
 function clearValues(){currentReading=null;for(const id of ['temperature','humidity','pressure','dewPoint'])$(id).textContent='—';}
 /* Chip temperature has its own validity, so a BME280 failure cannot hide a healthy MPU6050 value. */
@@ -149,12 +173,12 @@ function draw(onlyMotion=false){
 }
 /* Fetch incremental reports and backfill missed polls, without overlapping HTTP requests. */
 async function poll(){
- const started=performance.now(),controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),2000);
+ if(!i2cSensorsEnabled)return;
+ const started=performance.now();
  try{
-  const response=await fetch('/api/readings?since='+(lastSequence??0),{cache:'no-store',signal:controller.signal});
-  if(!response.ok)throw new Error('HTTP '+response.status);
-  const data=await response.json();
+  const data=await requestDashboardJson('/api/readings?since='+(lastSequence??0));
   if(typeof data.sequence!=='number'||typeof data.uptime_ms!=='number')throw new Error('Invalid API response');
+  i2cSensorsEnabled=data.i2c_enabled!==false;
   const now=performance.now();lastSuccess=now;
   // Load the firmware default once; later responses must not overwrite a user's edit.
   if(!altitudeInitialized){
@@ -193,6 +217,7 @@ async function poll(){
   $('connection').textContent=data.wifi_connected?'Connected to ESP32':'ESP32 Wi-Fi disconnected';
   $('error').textContent=valid?'':('Sensor: '+(data.error||'Waiting for a complete one-second window'));
   $('detail').textContent='Report #'+data.sequence+' · '+data.sample_count+'/5 readings · '+(data.sample_age_ms===null?'No report yet':data.sample_age_ms+' ms old')+' · Wi-Fi '+data.rssi_dbm+' dBm';
+  if(!i2cSensorsEnabled){$('error').textContent='';$('detail').textContent='Microphone build · I²C sensors disabled · Wi-Fi '+data.rssi_dbm+' dBm';$('motionCalibrate').disabled=true;$('gyroCalibrate').disabled=true;}
   if(valid){
    currentReading=data;updateCurrent();
   }else clearValues();
@@ -204,7 +229,7 @@ async function poll(){
   // Preserve history: the next successful request backfills missed reports.
  }finally{
   // Schedule after completion so slow connections never accumulate pending fetches.
-  clearTimeout(timeout);draw();setTimeout(poll,Math.max(0,1000-(performance.now()-started)));
+  draw();if(i2cSensorsEnabled)setTimeout(poll,Math.max(0,1000-(performance.now()-started)));
  }
 }
 let lastMotionUptime=null;
@@ -234,17 +259,15 @@ function consumeMotion(data,now){
 }
 /* Use an independent 1 Hz request stream, with bounded backfill and no overlapping fetches. */
 async function pollMotion(){
- const started=performance.now(),controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),2000);
+ if(!i2cSensorsEnabled)return;
+ const started=performance.now();
  try{
-  const response=await fetch('/api/motion?since='+(lastMotionSequence??0),{cache:'no-store',signal:controller.signal});
-  if(!response.ok)throw new Error('HTTP '+response.status);
-  consumeMotion(await response.json(),performance.now());
+  consumeMotion(await requestDashboardJson('/api/motion?since='+(lastMotionSequence??0)),performance.now());
  }catch(error){
   $('motionValues').textContent='—';$('gyroValues').textContent='—';$('motionError').textContent='Motion request failed: '+error.message;
  }finally{
-  clearTimeout(timeout);
   // Coalesce redraws to the publication rate; do not repaint environmental plots here.
-  draw(true);setTimeout(pollMotion,Math.max(0,1000-(performance.now()-started)));
+  draw(true);if(i2cSensorsEnabled)setTimeout(pollMotion,Math.max(0,1000-(performance.now()-started)));
  }
 }
 /* Calibration is explicit because assuming the board is flat on every boot would destroy valid orientation data. */
@@ -316,7 +339,64 @@ $('pickupDefaults').addEventListener('click',async()=>{
  finally{$('pickupSave').disabled=false;$('pickupDefaults').disabled=false;}
 });
 requestPickupSettings().catch(error=>{$('pickupSettingsStatus').textContent='Could not load settings: '+error.message;});
-window.addEventListener('resize',draw);
+let spectrumLive=null,spectrumReference=null,spectrumReceivedAt=0;
+const spectrumFresh=data=>data&&performance.now()-spectrumReceivedAt+data.age_ms<(data.stale_after_ms??2500);
+function drawSpectrum(){
+ const canvas=$('spectrumChart'),ratio=window.devicePixelRatio||1,w=canvas.clientWidth,h=240;
+ canvas.width=Math.round(w*ratio);canvas.height=Math.round(h*ratio);
+ const ctx=canvas.getContext('2d');ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,w,h);
+ const left=48,right=w-14,top=18,bottom=h-30,nyquist=(spectrumLive||spectrumReference)?.sample_rate_hz/2||8000;
+ ctx.font='11px system-ui';ctx.fillStyle='#a5b1bf';
+ for(let db=-120;db<=0;db+=30){const y=bottom-(db+120)/120*(bottom-top);ctx.strokeStyle='#344253';ctx.beginPath();ctx.moveTo(left,y);ctx.lineTo(right,y);ctx.stroke();ctx.fillText(String(db),3,y+4);}
+ for(let i=0;i<=4;i++){const hz=nyquist*i/4;ctx.textAlign=i===0?'left':i===4?'right':'center';ctx.fillText(hz.toFixed(0),left+i/4*(right-left),h-8);}ctx.textAlign='left';
+ for(const [data,color] of [[spectrumReference,'#c9b789'],[spectrumLive,'#8db4d6']]){
+  if(!data)continue;ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();
+  data.bins_dbfs.forEach((db,k)=>{const x=left+k*data.bin_hz/nyquist*(right-left),y=bottom-(Math.max(-120,Math.min(0,db))+120)/120*(bottom-top);if(k===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});ctx.stroke();
+ }
+ if(!spectrumLive){ctx.fillText('Waiting for fresh audio spectrum',left+5,top+20);}
+}
+function updateSpectrumComparison(){
+ if(!spectrumReference){$('spectrumComparison').textContent='Play a steady broadband sound at a fixed volume and distance. Save an exposed reference, then place the microphone in the box without moving the sound source.';return;}
+ if(!spectrumLive){$('spectrumComparison').textContent='Reference saved; waiting for fresh audio to compare.';return;}
+ const delta=v=>(v>=0?'+':'')+v.toFixed(1)+' dB';
+ $('spectrumComparison').textContent='Change from exposed reference: overall '+delta(spectrumLive.rms_dbfs-spectrumReference.rms_dbfs)+'; '+['low','mid','high'].map((name,i)=>name+' '+delta(spectrumLive.bands_dbfs[i]-spectrumReference.bands_dbfs[i])).join(' / ')+'. Negative values mean less received sound. This is a comparison, not a covered/uncovered decision.';
+}
+function clearLiveSpectrum(message){
+ spectrumLive=null;$('spectrumStatus').textContent=message;$('spectrumValues').textContent='Audio measurements unavailable';$('spectrumBands').textContent='';$('spectrumSave').disabled=true;updateSpectrumComparison();drawSpectrum();
+}
+function applySpectrum(data){
+ if(!data.ok){clearLiveSpectrum(data.error||'Microphone unavailable');return;}
+ const n=data.fft_size;
+ if(!Number.isInteger(n)||n<128||n>16384||(n&(n-1))!==0||!Number.isInteger(data.sample_rate_hz)||data.sample_rate_hz<8000||data.sample_rate_hz>48000||!Number.isFinite(data.bin_hz)||Math.abs(data.bin_hz-data.sample_rate_hz/n)>1e-6||data.bins_dbfs?.length!==n/2+1||!data.bins_dbfs.every(Number.isFinite)||data.bands_dbfs?.length!==3||!data.bands_dbfs.every(Number.isFinite)||!Number.isFinite(data.rms_dbfs)||!Number.isFinite(data.age_ms)||data.age_ms>=(data.stale_after_ms??2500))throw new Error('Invalid or stale spectrum');
+ if(spectrumReference&&(spectrumReference.fft_size!==n||spectrumReference.sample_rate_hz!==data.sample_rate_hz)){spectrumReference=null;$('spectrumClear').disabled=true;}
+ $('spectrumChart').ariaLabel='Microphone spectrum from zero to '+data.sample_rate_hz/2+' Hz in digital decibels';
+ $('spectrumResolution').textContent=(data.sample_rate_hz/1000)+' kHz mono · '+n+'-point Hann FFT · '+(n/2+1)+' bins · '+data.bin_hz.toFixed(4)+' Hz spacing · '+(1000*n/data.sample_rate_hz).toFixed(0)+' ms frames · '+(data.average_target_ms??1000)+' ms power-averaging target. Relative digital levels, not calibrated dB SPL. Reference stays in this tab until cleared or reloaded. No audio recordings are transmitted.';
+ if(data.i2c_enabled===false){i2cSensorsEnabled=false;$('connection').textContent='Connected to ESP32';$('error').textContent='';$('detail').textContent='Microphone build · I²C sensors disabled';$('motionCalibrate').disabled=true;$('gyroCalibrate').disabled=true;}
+ spectrumLive=data;spectrumReceivedAt=performance.now();$('spectrumSave').disabled=false;
+ $('spectrumStatus').textContent='Live audio spectrum · '+data.frames+' FFT frames averaged ('+(data.averaged_audio_ms??1000*data.frames*n/data.sample_rate_hz).toFixed(0)+' ms audio) · DMA overflows: '+data.dma_overflows+(data.clipped_samples?' · Warning: clipped samples: '+data.clipped_samples:'');
+ $('spectrumValues').textContent='Signal RMS: '+data.rms_dbfs.toFixed(1)+' dBFS · dominant bin (above 80 Hz): '+(Number.isFinite(data.peak_hz)?data.peak_hz.toFixed(0)+' Hz':'unavailable');
+ $('spectrumBands').textContent=['Low 80–500 Hz','Mid 500–2000 Hz','High 2000–'+data.sample_rate_hz/2+' Hz'].map((label,i)=>label+': '+data.bands_dbfs[i].toFixed(1)+' dBFS').join(' · ');
+ updateSpectrumComparison();drawSpectrum();
+}
+async function pollSpectrum(){
+ const started=performance.now();
+ try{applySpectrum(await requestDashboardJson('/api/microphone',4000));}
+ catch(error){
+  // A failed request does not invalidate a still-fresh measurement. The normal
+  // age watchdog continues to expire it, even while a retry is in progress.
+  if(spectrumFresh(spectrumLive))$('spectrumStatus').textContent='Audio update delayed; retrying: '+error.message;
+  else clearLiveSpectrum('Audio request failed: '+error.message);
+ }
+ finally{setTimeout(pollSpectrum,Math.max(0,1000-(performance.now()-started)));}
+}
+$('spectrumSave').addEventListener('click',()=>{
+ if(!spectrumFresh(spectrumLive))return;
+ spectrumReference={...spectrumLive,bins_dbfs:[...spectrumLive.bins_dbfs],bands_dbfs:[...spectrumLive.bands_dbfs]};$('spectrumClear').disabled=false;updateSpectrumComparison();drawSpectrum();
+});
+$('spectrumClear').addEventListener('click',()=>{spectrumReference=null;$('spectrumClear').disabled=true;updateSpectrumComparison();drawSpectrum();});
+setInterval(()=>{if(spectrumLive&&!spectrumFresh(spectrumLive))clearLiveSpectrum('Audio spectrum stale');},500);
+setTimeout(pollSpectrum,1000);
+window.addEventListener('resize',()=>{draw();drawSpectrum();});
 setInterval(draw,1000);poll();pollMotion();
 </script>
 </html>

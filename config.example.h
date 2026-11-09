@@ -24,3 +24,11 @@ constexpr char OTA_PASSWORD[] = "";
 
 // MPU6050 INT: active-high data-ready interrupt, separate from the shared I2C bus.
 constexpr uint8_t MPU_INTERRUPT_PIN = 17;
+
+// INMP441 I2S microphone; L/R is tied to GND (left channel).
+constexpr uint8_t MICROPHONE_BCLK_PIN = 18;
+constexpr uint8_t MICROPHONE_WS_PIN = 19;
+constexpr uint8_t MICROPHONE_DATA_PIN = 23;
+
+// Set true to restore BME280/MPU6050 acquisition in a combined-sensor build.
+constexpr bool I2C_SENSORS_ENABLED = false;
