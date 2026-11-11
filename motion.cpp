@@ -31,6 +31,9 @@ float motionTemperatureC = 0;
 bool motionTemperatureOk = false;
 uint32_t motionTemperatureMs = 0;
 const char *motionTemperatureError = "Waiting for MPU6050 temperature";
+uint32_t motionReadErrors = 0, motionWriteErrors = 0;
+uint8_t motionFailedRegister = 0, motionFailedCount = 0, motionWriteStatus = 0;
+unsigned motionReturnedBytes = 0;
 
 /* Explicit sign extension keeps both FIFO and direct-register decoding identical. */
 constexpr int32_t decodeMotionRaw(uint8_t high, uint8_t low) {
@@ -62,8 +65,16 @@ bool motionRead(uint8_t reg, uint8_t *data, uint8_t count) {
     return false;
   Wire.beginTransmission(MPU_ADDRESS);
   Wire.write(reg);
-  if (Wire.endTransmission(true) != 0 || Wire.requestFrom(MPU_ADDRESS, count) != count)
+  const uint8_t status = Wire.endTransmission(true);
+  const unsigned received = status == 0 ? Wire.requestFrom(MPU_ADDRESS, count) : 0;
+  if (status != 0 || received != count) {
+    ++motionReadErrors;
+    motionFailedRegister = reg;
+    motionFailedCount = count;
+    motionWriteStatus = status;
+    motionReturnedBytes = received;
     return false;
+  }
   for (uint8_t i = 0; i < count; ++i)
     data[i] = Wire.read();
   return true;
@@ -76,7 +87,15 @@ bool motionWrite(uint8_t reg, uint8_t value) {
   Wire.beginTransmission(MPU_ADDRESS);
   Wire.write(reg);
   Wire.write(value);
-  return Wire.endTransmission() == 0;
+  const uint8_t status = Wire.endTransmission();
+  if (status != 0) {
+    ++motionWriteErrors;
+    motionFailedRegister = reg;
+    motionFailedCount = 0;
+    motionWriteStatus = status;
+    motionReturnedBytes = 0;
+  }
+  return status == 0;
 }
 
 /* Reset FIFO framing: accel XYZ then gyro XYZ, twelve bytes with temperature excluded. */
@@ -277,6 +296,12 @@ void publishMotion(uint32_t now) {
   else
     Serial.printf("[mpu %lu, n=%u] %s\n", (unsigned long)motionLatest.sequence, motionSamples,
                   motionLatest.error);
+  if (!motionLatest.ok && (motionReadErrors || motionWriteErrors))
+    Serial.printf("[mpu bus] read-errors=%lu write-errors=%lu last-reg=0x%02X requested=%u "
+                  "received=%u write-status=%u clock=%lu Hz\n",
+                  (unsigned long)motionReadErrors, (unsigned long)motionWriteErrors,
+                  motionFailedRegister, motionFailedCount, motionReturnedBytes,
+                  motionWriteStatus, (unsigned long)Wire.getClock());
   motionSamples = 0;
   motionWindowFailed = false;
   motionLastReport = now;
@@ -537,6 +562,12 @@ MotionStatus motionStatus() {
   status.error = motionError;
   status.calibrationError = motionCalibrationError;
   status.temperature = motionTemperature();
+  status.readErrors = motionReadErrors;
+  status.writeErrors = motionWriteErrors;
+  status.failedRegister = motionFailedRegister;
+  status.failedCount = motionFailedCount;
+  status.writeStatus = motionWriteStatus;
+  status.returnedBytes = motionReturnedBytes;
   for (unsigned i = 0; i < 3; ++i) {
     status.gyroMean[i] = motionGyroMean[i];
     status.gyroBias[i] = motionGyroBias[i];

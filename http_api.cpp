@@ -149,6 +149,12 @@ void appendMotion(String &json, uint32_t now) {
           ",\"target_hz\":100,\"publish_interval_ms\":1000";
   json += ",\"interrupts_seen\":" + String(interrupts) +
           ",\"fifo_overflows\":" + String(status.overflows);
+  json += ",\"i2c_read_errors\":" + String(status.readErrors) +
+          ",\"i2c_write_errors\":" + String(status.writeErrors) +
+          ",\"i2c_last_failed_register\":" + String(status.failedRegister) +
+          ",\"i2c_last_requested_bytes\":" + String(status.failedCount) +
+          ",\"i2c_last_received_bytes\":" + String(status.returnedBytes) +
+          ",\"i2c_last_write_status\":" + String(status.writeStatus);
   json += ",\"temperature_ok\":" + String(temperatureValid ? "true" : "false") +
           ",\"temperature_c\":" +
           (temperatureValid ? String(status.temperature.celsius, 3) : String("null"));
@@ -307,7 +313,8 @@ void sendMicrophoneSpectrum() {
   String json;
   json.reserve(600 + SpectrumAnalysis::BINS * 8);
   json = "{\"ok\":" + String(ok ? "true" : "false") + ",\"error\":\"";
-  json += !microphone.ready                ? "Microphone initialization failed"
+  json += !MICROPHONE_ENABLED              ? "Microphone disabled in config.h"
+          : !microphone.ready              ? "Microphone initialization failed"
           : microphone.paused              ? "Microphone paused for OTA"
           : !report.valid                  ? "Waiting for audio spectrum"
           : age >= AUDIO_SPECTRUM_STALE_MS ? "Audio spectrum stale"

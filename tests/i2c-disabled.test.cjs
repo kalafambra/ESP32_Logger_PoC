@@ -1,9 +1,10 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
 const root=path.join(__dirname,'..'),sketch=fs.readFileSync(path.join(root,'ESP32_1.ino'),'utf8'),motion=fs.readFileSync(path.join(root,'motion.cpp'),'utf8'),environment=fs.readFileSync(path.join(root,'environment.cpp'),'utf8');
-for(const name of ['config.example.h','config.h'])if(fs.existsSync(path.join(root,name)))assert.ok(/constexpr bool I2C_SENSORS_ENABLED = false;/.test(fs.readFileSync(path.join(root,name),'utf8')),name+' must select microphone-only mode');
+// Exercise the disabled path independently of the mode selected for a real build.
+for(const name of ['config.example.h','config.h'])if(fs.existsSync(path.join(root,name)))assert.ok(/constexpr bool I2C_SENSORS_ENABLED = (true|false);/.test(fs.readFileSync(path.join(root,name),'utf8')),name+' must declare the build-mode flag');
 // Run the complete register helpers with a bus that fails on any access.
 for(const [source,name] of [[environment,'readRegisters'],[environment,'writeRegister'],[motion,'motionRead'],[motion,'motionWrite']]){
- const body=source.match(new RegExp('bool '+name+'\\([^\\n]*\\) \\{([\\s\\S]*?)\\n\\}'))[1].replace(/uint8_t i/g,'let i');
+ const body=source.match(new RegExp('bool '+name+'\\([^\\n]*\\) \\{([\\s\\S]*?)\\n\\}'))[1].replace(/uint8_t i/g,'let i').replace(/const (uint8_t|unsigned) /g,'const ');
  const c={I2C_SENSORS_ENABLED:false,Wire:new Proxy({},{get(){throw new Error(name+' touched I2C');}})};
  vm.createContext(c);assert.equal(vm.runInContext('(function(){'+body+'\n})()',c),false);
 }

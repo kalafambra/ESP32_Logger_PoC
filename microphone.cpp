@@ -32,6 +32,10 @@ void stopMicrophone() {
 }
 
 bool setupMicrophone() {
+  if (!MICROPHONE_ENABLED) {
+    Serial.println("[microphone] Disabled in config.h; I2S pins and DMA inactive");
+    return false;
+  }
   if (microphoneReady)
     return true;
   i2s_chan_config_t channel = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);

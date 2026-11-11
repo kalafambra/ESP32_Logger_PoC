@@ -29,6 +29,9 @@ struct MotionStatus {
   const char *error, *calibrationError;
   float gyroMean[3], gyroBias[3], bias[3];
   MotionTemperature temperature;
+  uint32_t readErrors, writeErrors;
+  uint8_t failedRegister, failedCount, writeStatus;
+  unsigned returnedBytes;
 };
 
 constexpr uint8_t MOTION_DIAGNOSTIC_REGISTERS[] = {0x19, 0x1A, 0x1C, 0x23, 0x6A, 0x6B, 0x6C, 0x75};

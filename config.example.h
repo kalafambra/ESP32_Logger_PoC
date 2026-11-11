@@ -24,6 +24,8 @@ constexpr char OTA_PASSWORD[] = "";
 constexpr uint8_t MPU_INTERRUPT_PIN = 17;
 
 // INMP441 I2S microphone; L/R is tied to GND (left channel).
+// Set false when disconnected to leave I2S pins and DMA inactive.
+constexpr bool MICROPHONE_ENABLED = true;
 constexpr uint8_t MICROPHONE_BCLK_PIN = 18;
 constexpr uint8_t MICROPHONE_WS_PIN = 19;
 constexpr uint8_t MICROPHONE_DATA_PIN = 23;

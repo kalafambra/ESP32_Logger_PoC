@@ -318,6 +318,47 @@ build/; all are ignored by Git. Compile with an available Arduino CLI:
 arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=no_fs --build-path ./build-ble .
 ```
 
+Alternatively, run these standard-library Python helpers from the project root:
+
+```powershell
+python scripts/compile_firmware.py
+python scripts/flash_ota.py
+```
+
+For USB flashing on COM5, use `python scripts/flash_usb.py` instead of the OTA
+command. Close any serial monitor using that port first. The USB script uses
+Arduino's ESP32 upload recipe for the bootloader, partition table and application,
+with the same `no_fs` layout as compilation. It checks build freshness and required
+images before opening the port. Override the port with `--port COM6`; it also
+supports `--verbose`, `--dry-run`, `--cli`, `--config` and `--build-dir`.
+
+The compiler script builds the current saved sources and `config.h` into
+`build-ble/` with the OTA-capable `no_fs` layout. It detects Arduino CLI on PATH
+or in common Arduino IDE locations (including this PC's D: installation), and
+uses `~/.arduinoIDE/arduino-cli.yaml` when present. Override detection with
+`--cli PATH` (or `ARDUINO_CLI`) and `--config PATH`. Add `--clean` after source
+renames or when cached build files cause problems. Use
+`python scripts/compile_firmware.py --verbose` (or `-v`) to show detailed compiler
+commands and build output.
+
+The flash script defaults to the current device at `192.168.50.83`; use
+`--ip ADDRESS` if DHCP changes its address. It locates `espota.py` from the build's
+platform metadata or the installed ESP32 core; `--uploader PATH` overrides this.
+It delegates authentication to `upload_ota.py`, so the password from `config.h`
+is never placed in command arguments. It refuses missing application images
+or images older than the sketch sources/configuration: compile first.
+Both scripts accept `--build-dir PATH` and `--dry-run`. Flashing does not compile
+automatically. Run them with the same Python interpreter; no pip packages are
+required. The existing `.venv-device-tests/Scripts/python.exe` also works.
+
+To enable I2C sensors, set `I2C_SENSORS_ENABLED = true` in `config.h`, save, then
+compile and flash with the commands above. This enables BME280, MPU6050 and
+pickup detection alongside the microphone. Restore the shared SDA/SCL wiring
+and MPU interrupt connection using the configured pins (defaults GPIO21,
+GPIO22 and GPIO17). BME280 probes 0x76/0x77; MPU6050 expects 0x68. Existing saved
+calibration is restored; enabling the flag does not automatically recalibrate.
+Set the flag back to `false` and rebuild for microphone-only operation.
+
 For a precompiled wireless application image, scripts/upload_ota.py accepts
 --ip, --firmware and --uploader (the installed Espressif espota.py). Do not OTA
 upload a merged flash image or bootloader; use the sketch application .bin.
