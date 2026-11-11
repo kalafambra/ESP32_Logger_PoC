@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 
+
 from compile_firmware import DEFAULT_BUILD
 
 ROOT = Path(__file__).resolve().parents[1]
