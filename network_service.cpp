@@ -4,7 +4,6 @@
 #include <time.h>
 #include "config.h"
 #include "firmware_features.h"
-#include "environment_history.h"
 #include "http_api.h"
 #include "ota_service.h"
 #include "pickup_ble.h"
@@ -45,9 +44,8 @@ void startOptionalServices() {
 #else
   Serial.println("[ble] Disabled at build time; event logging remains available over HTTP");
 #endif
-  Serial.printf("[history] Last 30 s at 1 Hz; older data in 30 s buckets, max %u points\n",
-                EnvironmentHistory::MAX_POINTS);
-  Serial.printf("[memory] Radios/routes/history: free=%u largest=%u minimum=%u\n",
+  Serial.println("[delivery] Browser owns plot history; firmware retains pending ACK batches only");
+  Serial.printf("[memory] Radios/routes/delivery: free=%u largest=%u minimum=%u\n",
                 ESP.getFreeHeap(), ESP.getMaxAllocHeap(), ESP.getMinFreeHeap());
   radioServicesReady = true;
 }
@@ -56,7 +54,7 @@ void startOptionalServices() {
 void setupNetwork() {
   WiFi.onEvent(wifiEvent);
   wifiDriverReady =
-      WiFi.mode(WIFI_STA); // Reserve Wi-Fi task/queue memory before optional BLE/history.
+      WiFi.mode(WIFI_STA); // Reserve Wi-Fi task/queue memory before optional BLE/workers.
   if (wifiDriverReady)
     WiFi.setSleep(false); // Favor dashboard latency on this continuously sampling device.
   // One application-owned retry policy avoids racing automatic reconnect.

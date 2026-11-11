@@ -16,7 +16,7 @@ button{font:inherit;padding:10px 14px;border:1px solid #46566a;border-radius:8px
 h1{font-size:clamp(1.7rem,4vw,2.65rem);letter-spacing:-.04em;margin:4px 0 10px;font-weight:750}.eyebrow{text-transform:uppercase;letter-spacing:.18em;color:#91b6d8;font-size:.72rem;font-weight:750}.brand p{margin:0}
 p{color:#a5b1bf;line-height:1.6}.status{padding:16px 20px;background:#19212b;border:1px solid #354253;border-left:3px solid #91b6d8;border-radius:14px;margin:20px 0}
 #connection{font-weight:700;color:#d3e0ec}#detail{margin-top:4px;color:#a5b1bf;font-size:.87rem}#error{color:#e0a0a6;min-height:1.5em}.cards{display:grid;grid-template-columns:minmax(0,1fr);gap:20px}
-input{font:inherit;padding:10px 12px;width:140px;border:1px solid #46566a;border-radius:9px;background:#11161d;color:#e4e9ef}input:focus-visible{outline:2px solid #9fc5e5;outline-offset:3px}input:disabled{opacity:.5}#altitudeError{color:#e0a0a6}.settings{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:20px 0}.settings label{font-weight:600;font-size:.9rem}
+select{font:inherit;padding:8px;border:1px solid #46566a;border-radius:8px;background:#11161d;color:#e4e9ef;margin:8px}input{font:inherit;padding:10px 12px;width:140px;border:1px solid #46566a;border-radius:9px;background:#11161d;color:#e4e9ef}input:focus-visible{outline:2px solid #9fc5e5;outline-offset:3px}input:disabled{opacity:.5}#altitudeError{color:#e0a0a6}.settings{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:20px 0}.settings label{font-weight:600;font-size:.9rem}
 article{background:#19212b;border:1px solid #354253;border-radius:20px;padding:24px;min-width:0;box-shadow:0 6px 24px #00000020}h2{font-size:.82rem;text-transform:uppercase;letter-spacing:.1em;color:#b7c7d6;margin:0 0 12px}
 .value{font-size:2.5rem;font-weight:650;letter-spacing:-.04em;font-variant-numeric:tabular-nums}.unit{font-size:1rem;color:#a5b1bf}canvas{width:100%;height:240px;display:block;margin-top:18px}#dewPoint{color:#a9c9e3}
 small{color:#94a3b4}footer{margin:24px 0;color:#94a3b4;font-size:.8rem;line-height:1.6}
@@ -31,10 +31,10 @@ small{color:#94a3b4}footer{margin:24px 0;color:#94a3b4;font-size:.8rem;line-heig
 <div class="settings"><label for="altitude">Altitude above sea level (m)</label><input id="altitude" type="number" min="-500" max="9000" step="0.1" disabled aria-describedby="altitudeError"><span id="altitudeError" role="status"></span></div>
 <p>Dew point: <strong id="dewPoint">—</strong> °C <small>(calculated from one-second mean temperature and humidity)</small></p>
 <p>BME280: solid mean of 5 readings, faint minimum/maximum (30% opacity). MPU6050 temperature: one sample per second.</p><main class="cards">
-<article><h2>Temperature</h2><div class="temperature-values"><div><small class="bme-label">BME280 · ambient</small><span class="value" id="temperature">—</span> <span class="unit">°C</span></div><div><small class="mpu-label">MPU6050 · chip</small><span class="value" id="mpuTemperature">—</span> <span class="unit">°C</span></div></div><small id="mpuTemperatureError" role="status"></small><canvas id="tempChart" role="img" aria-label="BME280 ambient and MPU6050 chip temperatures in degrees Celsius over up to 600 seconds"></canvas><small><span class="bme-label">Blue: BME280</span> · <span class="mpu-label">Amber: MPU6050 chip</span> · Time relative to now (seconds)</small></article>
-<article><h2>Relative humidity</h2><span class="value" id="humidity">—</span> <span class="unit">%</span><canvas id="humChart" role="img" aria-label="Relative humidity in percent over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
-<article><h2>Estimated sea-level pressure</h2><span class="value" id="pressure">—</span> <span class="unit">hPa</span><canvas id="pressureChart" role="img" aria-label="Sea-level pressure over up to 600 seconds"></canvas><small>Time relative to now (seconds)</small></article>
-<article><h2>MPU6050 acceleration</h2><p id="motionValues">Waiting for motion sensor</p><p><strong>Gyroscope</strong><br><span id="gyroValues">Waiting for motion sensor</span><br><small>One-second mean · saved zero-rate bias corrected · deg/s</small></p><button id="gyroCalibrate" type="button">Calibrate gyro (keep stationary)</button><p id="motionError" role="status"></p><button id="motionCalibrate" type="button" style="padding:10px 14px;border:1px solid #46566a;border-radius:9px;background:#253344;color:#e4e9ef;font:inherit;cursor:pointer">Calibrate flat (Z up)</button><p id="motionCalibrationStatus" role="status">Calibration removes fixed bias; gravity is retained.</p><small><span style="color:#8db4d6">X</span> · <span style="color:#86b8ad">Y</span> · <span style="color:#c9b789">Z</span> · m/s², includes gravity · one-second means · 100 Hz acquisition target</small><canvas id="motionChart" role="img" aria-label="MPU6050 X Y Z acceleration in meters per second squared"></canvas><small>Time relative to now (seconds)</small></article>
+<article><h2>Temperature</h2><div class="temperature-values"><div><small class="bme-label">BME280 · ambient</small><span class="value" id="temperature">—</span> <span class="unit">°C</span></div><div><small class="mpu-label">MPU6050 · chip</small><span class="value" id="mpuTemperature">—</span> <span class="unit">°C</span></div></div><small id="mpuTemperatureError" role="status"></small><canvas id="tempChart" role="img" aria-label="BME280 ambient and MPU6050 chip temperatures in degrees Celsius over up to 600 seconds"></canvas><label for="tempChartRange">Visible time </label><select id="tempChartRange"><option value="15">15 seconds</option><option value="30">30 seconds</option><option value="60">60 seconds</option><option value="120">120 seconds</option><option value="300">300 seconds</option><option value="600" selected>600 seconds</option></select><small id="tempChartTime"></small><small><span class="bme-label">Blue: BME280</span> · <span class="mpu-label">Amber: MPU6050 chip</span> · Local clock time (HH:mm:ss)</small></article>
+<article><h2>Relative humidity</h2><span class="value" id="humidity">—</span> <span class="unit">%</span><canvas id="humChart" role="img" aria-label="Relative humidity in percent over up to 600 seconds"></canvas><label for="humChartRange">Visible time </label><select id="humChartRange"><option value="15">15 seconds</option><option value="30">30 seconds</option><option value="60">60 seconds</option><option value="120">120 seconds</option><option value="300">300 seconds</option><option value="600" selected>600 seconds</option></select><small id="humChartTime"></small><small>Local clock time (HH:mm:ss)</small></article>
+<article><h2>Estimated sea-level pressure</h2><span class="value" id="pressure">—</span> <span class="unit">hPa</span><canvas id="pressureChart" role="img" aria-label="Sea-level pressure over up to 600 seconds"></canvas><label for="pressureChartRange">Visible time </label><select id="pressureChartRange"><option value="15">15 seconds</option><option value="30">30 seconds</option><option value="60">60 seconds</option><option value="120">120 seconds</option><option value="300">300 seconds</option><option value="600" selected>600 seconds</option></select><small id="pressureChartTime"></small><small>Local clock time (HH:mm:ss)</small></article>
+<article><h2>MPU6050 acceleration</h2><p id="motionValues">Waiting for motion sensor</p><p><strong>Gyroscope</strong><br><span id="gyroValues">Waiting for motion sensor</span><br><small>One-second mean · saved zero-rate bias corrected · deg/s</small></p><button id="gyroCalibrate" type="button">Calibrate gyro (keep stationary)</button><p id="motionError" role="status"></p><button id="motionCalibrate" type="button" style="padding:10px 14px;border:1px solid #46566a;border-radius:9px;background:#253344;color:#e4e9ef;font:inherit;cursor:pointer">Calibrate flat (Z up)</button><p id="motionCalibrationStatus" role="status">Calibration removes fixed bias; gravity is retained.</p><small><span style="color:#8db4d6">X</span> · <span style="color:#86b8ad">Y</span> · <span style="color:#c9b789">Z</span> · m/s², includes gravity · one-second means · 100 Hz acquisition target</small><canvas id="motionChart" role="img" aria-label="MPU6050 X Y Z acceleration in meters per second squared"></canvas><label for="motionChartRange">Visible time </label><select id="motionChartRange"><option value="15">15 seconds</option><option value="30">30 seconds</option><option value="60">60 seconds</option><option value="120">120 seconds</option><option value="300">300 seconds</option><option value="600" selected>600 seconds</option></select><small id="motionChartTime"></small><small>Local clock time (HH:mm:ss)</small></article>
 <article><h2>Microphone spectrum</h2>
 <p id="spectrumStatus" role="status">Waiting for microphone</p>
 <p id="spectrumValues">No audio measurements yet</p>
@@ -47,9 +47,37 @@ small{color:#94a3b4}footer{margin:24px 0;color:#94a3b4;font-size:.8rem;line-heig
 <small id="spectrumResolution">Mono Hann FFT · power averaged over about one second. Relative digital levels, not calibrated dB SPL. Reference stays in this tab until cleared or reloaded. No audio recordings are transmitted.</small>
 </article>
 </main>
-<footer>Plots accumulate in this browser tab, up to 600 seconds. Refresh starts fresh. The ESP32 keeps only small unacknowledged delivery buffers. Faint lines retain minima/maxima; missing reports appear as gaps. Altitude adjusts pressure in this tab; reload restores the configured altitude. No internet services required.</footer>
+<footer>Plots accumulate in this browser tab, up to 600 seconds. Refresh starts fresh. Labels use the browser local clock, estimated from initial request timing. Range selection preserves retained data. The ESP32 keeps only small unacknowledged delivery buffers. Faint lines retain minima/maxima; missing reports appear as gaps. Altitude adjusts pressure in this tab; reload restores the configured altitude. No internet services required.</footer>
 <script>
 'use strict';
+
+// Fixed browser wall-clock mapping per device boot; later network jitter cannot move points.
+const pageWallOrigin=Date.now()-performance.now(),deviceClocks=new Map();
+function syncDeviceClock(data,received=performance.now()){
+ if(!Number.isInteger(data.uptime_ms)||data.uptime_ms<0||data.uptime_ms>0xFFFFFFFF)throw new Error('Invalid device time');
+ const boot=data.boot_id??0,uptime=data.uptime_ms>>>0;
+ let clock=deviceClocks.get(boot);
+ if(!clock){
+  const timing=data._requestTiming;
+  const midpoint=timing?(timing.sent+timing.received)/2:received;
+  clock={uptime,epoch:pageWallOrigin+midpoint};deviceClocks.set(boot,clock);
+  if(deviceClocks.size>4)deviceClocks.delete(deviceClocks.keys().next().value);
+ }else{
+  const advance=(uptime-clock.uptime)|0;
+  if(advance>0){clock.epoch+=advance;clock.uptime=uptime;}
+ }
+ return {epoch:sample=>clock.epoch+((sample-clock.uptime)|0)};
+}
+function formatClock(epoch,fractional=false){
+ if(!Number.isFinite(epoch))return '—';
+ const date=new Date(epoch),text=date.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+ return text+(fractional?'.'+String(date.getMilliseconds()).padStart(3,'0'):'');
+}
+function formatPlotDate(epoch){return new Date(epoch).toLocaleDateString()+' · '+Intl.DateTimeFormat().resolvedOptions().timeZone;}
+function selectedSeconds(id,fallback=600){
+ const seconds=Number($(id).value);return [15,30,60,120,300,600].includes(seconds)?seconds:fallback;
+}
+
 const history=[],motionHistory=[];
 let lastMotionSequence=null;
 const charts=[['tempChart','t','#8db4d6','°C'],['humChart','h','#86b8ad','%'],['pressureChart','p','#c9b789','hPa'],['motionChart','a','#8db4d6','m/s²']];
@@ -63,7 +91,7 @@ let dashboardRequest=Promise.resolve();
 function requestDashboardJson(url,timeoutMs=2000){
  const run=async()=>{
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),timeoutMs);
-  try{const response=await fetch(url,{cache:'no-store',signal:controller.signal});if(!response.ok)throw new Error('HTTP '+response.status);return await response.json();}
+  try{const sent=performance.now();const response=await fetch(url,{cache:'no-store',signal:controller.signal});if(!response.ok)throw new Error('HTTP '+response.status);const data=await response.json();Object.defineProperty(data,'_requestTiming',{value:{sent,received:performance.now()}});return data;}
   finally{clearTimeout(timeout);}
  };
  const result=dashboardRequest.then(run,run);
@@ -99,10 +127,10 @@ function updateCurrent(){
 /* Convert pressure at render time to preserve raw history when altitude changes. */
 function channelValues(point,key){return key==='p'&&point.p?point.p.map(p=>seaLevelPressure(p,altitudeM)):point[key];}
 /* Fill the plot with available history instead of reserving empty space for ten minutes. */
-function timeRange(now,records=history){
+function timeRange(now,records=history,seconds=600){
  // Anchor to newest report so sparse one-second reports fill the full width.
  const end=records.length?records[records.length-1].at:now;
- const start=records.length>1?Math.max(end-600000,records[0].at):end-5000;
+ const start=records.length>1?Math.max(end-seconds*1000,records[0].at):end-5000;
  return {start,end,span:Math.max(1,end-start)};
 }
 /* Keep the previous valid correction while the user is typing an incomplete altitude. */
@@ -120,8 +148,10 @@ function draw(onlyMotion=false){
  while(motionHistory.length && motionHistory[0].at<now-600000)motionHistory.shift();
  for(const [id,key,color,unit] of charts){
   if(onlyMotion===true&&key!=='a')continue;
-  const records=key==='a'?motionHistory:history;
-  const {start,end,span}=timeRange(now,records);
+  const retained=key==='a'?motionHistory:history;
+  const {start,end,span}=timeRange(now,retained,selectedSeconds(id+'Range'));
+  const records=retained.filter(point=>point.at>=start&&point.at<=end);
+  $(id+'Time').textContent=' · '+formatPlotDate(pageWallOrigin+start)+' – '+formatPlotDate(pageWallOrigin+end);
   const canvas=$(id),ratio=window.devicePixelRatio||1,w=canvas.clientWidth,h=240;
   if(canvas.width!==Math.round(w*ratio)||canvas.height!==Math.round(h*ratio)){canvas.width=Math.round(w*ratio);canvas.height=Math.round(h*ratio);}
   const ctx=canvas.getContext('2d');ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,w,h);
@@ -138,8 +168,8 @@ function draw(onlyMotion=false){
    ctx.fillText((hi-(hi-lo)*i/4).toFixed(1),2,y+4);
   }
   for(const fraction of [0,0.5,1]){
-   const x=left+fraction*(right-left),seconds=(start+fraction*span-now)/1000;
-   ctx.textAlign=fraction===1?'right':fraction===0?'left':'center';ctx.fillText(seconds.toFixed(1),x,h-8);
+   const x=left+fraction*(right-left),epoch=pageWallOrigin+start+fraction*span;
+   ctx.textAlign=fraction===1?'right':fraction===0?'left':'center';ctx.fillText(formatClock(epoch,span<10000),x,h-8);
   }
   ctx.textAlign='left';ctx.strokeStyle=color;
   // Render min and max first, each at exactly 30% opacity, then the mean.
@@ -190,20 +220,22 @@ async function poll(){
    altitudeM=value;altitudeInitialized=true;$('altitude').value=String(value);$('altitude').disabled=false;
   }
   // A reboot invalidates sequence continuity and the previous device-uptime timeline.
-  if(lastUptime!==null && ((environmentBoot&&data.boot_id!==environmentBoot)||data.uptime_ms<lastUptime||data.sequence<lastSequence)){history.length=0;lastSequence=null;}
+  if(lastUptime!==null && ((environmentBoot&&data.boot_id!==environmentBoot)||(!data.boot_id&&data.uptime_ms<lastUptime)||data.sequence<lastSequence)){history.length=0;lastSequence=null;}
+  const clock=syncDeviceClock(data,now);
   lastUptime=data.uptime_ms;
   environmentBoot=data.boot_id??0;
   if(!Array.isArray(data.history))throw new Error('Missing aggregate history; refresh after firmware update');
   // Validate the complete package before advancing the ACK cursor.
   const incoming=[];
   for(const point of data.history){
-   if(!Number.isInteger(point.sequence)||point.sequence<1||!Number.isFinite(point.age_ms))throw new Error('Invalid report record');
+   if(!Number.isInteger(point.sequence)||point.sequence<1||!Number.isFinite(point.age_ms)||point.age_ms<0||(point.sample_ms!==undefined&&(!Number.isInteger(point.sample_ms)||point.sample_ms<0||point.sample_ms>0xFFFFFFFF)))throw new Error('Invalid report record');
    if(point.sequence<=(lastSequence??0))continue;
    const channels=[point.temperature_c,point.humidity_pct,point.pressure_hpa];
    if(!channels.every(c=>Array.isArray(c)&&c.length===3&&c.every(v=>v===null||Number.isFinite(v))))throw new Error('Invalid report channels');
    const ok=point.ok&&point.sample_count===5&&channels.every(c=>c.every(Number.isFinite));
    incoming.push({firstSequence:point.sequence,sequence:point.sequence,resolution:1000,
-    at:now-Math.min(point.age_ms,600000),t:ok?point.temperature_c:null,h:ok?point.humidity_pct:null,
+    epoch_ms:clock.epoch((point.sample_ms??(data.uptime_ms-point.age_ms))>>>0),
+    at:clock.epoch((point.sample_ms??(data.uptime_ms-point.age_ms))>>>0)-pageWallOrigin,t:ok?point.temperature_c:null,h:ok?point.humidity_pct:null,
     p:ok?point.pressure_hpa:null,m:Number.isFinite(point.mpu_temperature_c)?point.mpu_temperature_c:null});
   }
   for(let i=1;i<incoming.length;i++)if(incoming[i].sequence<=incoming[i-1].sequence)throw new Error('Unordered reports');
@@ -234,9 +266,10 @@ let lastMotionUptime=null;
 function consumeMotion(data,now){
  const motion=data.motion;
  if(!motion)throw new Error('Missing motion status');
- if(lastMotionUptime!==null&&((motionBoot&&data.boot_id!==motionBoot)||data.uptime_ms<lastMotionUptime||motion.sequence<lastMotionSequence)){
+ if(lastMotionUptime!==null&&((motionBoot&&data.boot_id!==motionBoot)||(!data.boot_id&&data.uptime_ms<lastMotionUptime)||motion.sequence<lastMotionSequence)){
   motionHistory.length=0;lastMotionSequence=null;
  }
+ const clock=syncDeviceClock(data,now);
  lastMotionUptime=data.uptime_ms;
  motionBoot=data.boot_id??0;
  updatePickupStatus(data.pickup);
@@ -250,10 +283,10 @@ function consumeMotion(data,now){
  $('motionValues').textContent=ok?motion.acceleration_m_s2.map((v,i)=>['X','Y','Z'][i]+': '+v.toFixed(3)).join(' · ')+' m/s² · n='+(motion.sample_count??'?')+' · FIFO overflows: '+(motion.fifo_overflows??0):'—';
  const incoming=[];
  for(const point of data.history||[]){
-  if(!Number.isInteger(point.sequence)||point.sequence<1||!Number.isFinite(point.age_ms)||!Array.isArray(point.a)||point.a.length!==3||!point.a.every(v=>v===null||Number.isFinite(v)))throw new Error('Invalid motion record');
+  if(!Number.isInteger(point.sequence)||point.sequence<1||!Number.isFinite(point.age_ms)||point.age_ms<0||(point.sample_ms!==undefined&&(!Number.isInteger(point.sample_ms)||point.sample_ms<0||point.sample_ms>0xFFFFFFFF))||!Array.isArray(point.a)||point.a.length!==3||!point.a.every(v=>v===null||Number.isFinite(v)))throw new Error('Invalid motion record');
   if(point.sequence<=(lastMotionSequence??0))continue;
   const valid=point.ok&&point.a.every(Number.isFinite);
-  incoming.push({sequence:point.sequence,at:now-Math.min(point.age_ms,600000),a:valid?point.a:null});
+  incoming.push({sequence:point.sequence,epoch_ms:clock.epoch((point.sample_ms??(data.uptime_ms-point.age_ms))>>>0),at:clock.epoch((point.sample_ms??(data.uptime_ms-point.age_ms))>>>0)-pageWallOrigin,a:valid?point.a:null});
  }
  for(let i=1;i<incoming.length;i++)if(incoming[i].sequence<=incoming[i-1].sequence)throw new Error('Unordered motion reports');
  for(const point of incoming){motionHistory.push(point);lastMotionSequence=point.sequence;}
@@ -400,6 +433,7 @@ $('spectrumClear').addEventListener('click',()=>{spectrumReference=null;$('spect
 setInterval(()=>{if(spectrumLive&&!spectrumFresh(spectrumLive))clearLiveSpectrum('Audio spectrum stale');},500);
 setTimeout(pollSpectrum,1000);
 window.addEventListener('resize',()=>{draw();drawSpectrum();});
+for(const [id] of charts)$(id+'Range').addEventListener('change',()=>draw());
 setInterval(draw,1000);poll();pollMotion();
 </script>
 </html>
@@ -415,13 +449,41 @@ const char PICKUP_TUNING_HTML[] PROGMEM = R"TUNING(
 <p>Watch the signals the detector actually compares. Solid lines are measurements; dashed lines are thresholds/settings. Telemetry is sampled at 20 Hz and fetched in batches at 5 Hz. Short state changes are captured immediately.</p>
 <div id="status" class="panel" role="status" aria-live="polite">Connecting…</div><div id="error" role="status"></div>
 <details open><summary>Persistent detection settings</summary><p>Save applies validated settings and restarts baseline learning. Active alerts remain until stillness is confirmed. Save preserves hidden parameters; Restore defaults resets all parameters. Changes are saved on the ESP32.</p><form id="settingsForm"><div id="fields" class="settings"></div><div class="controls"><button id="save" type="submit" disabled>Save settings</button><button id="defaults" type="button" disabled>Restore defaults</button><button id="reload" type="button">Reload saved settings</button></div><p id="saveStatus" role="status">Loading settings…</p></form></details>
-<div class="controls"><label>History window<select id="window"><option value="15">15 seconds</option><option value="30">30 seconds</option><option value="60" selected>60 seconds</option><option value="120">120 seconds</option><option value="600">600 seconds</option></select></label><button id="pause">Pause capture</button><button id="clear">Clear plots</button><button id="export">Export CSV</button><span id="captureInfo"></span></div>
+<div class="controls"><label>History window<select id="window"><option value="15">15 seconds</option><option value="30">30 seconds</option><option value="60" selected>60 seconds</option><option value="120">120 seconds</option><option value="300">300 seconds</option><option value="600">600 seconds</option></select></label><button id="pause">Pause capture</button><button id="clear">Clear plots</button><button id="export">Export CSV</button><span id="captureInfo"></span></div>
 <nav class="nav"><a href="#movement">Movement triggers</a><a href="#quiet-gyro">Stillness / clearing</a><a href="#persistence">Trigger persistence</a></nav>
 <div id="charts"></div>
 <div class="panel"><h2>Recent detector events</h2><div id="eventLog">Waiting for events.</div></div>
-<footer>Plots show processing-time samples, not an oscilloscope trace. Nulls and missing records appear as gaps. RMS is unavailable when rotation rejects the quiet window before RMS evaluation; use instantaneous rotation to see why. While paused/closed, telemetry capture stops after a short lease. Historical thresholds are preserved when settings change. Pickup classification and LED ownership are unchanged.</footer>
+<footer>Plots use estimated local clock timestamps, not an oscilloscope trace. CSV includes UTC ISO timestamps and device uptime. Nulls and missing records appear as gaps. RMS is unavailable when rotation rejects the quiet window before RMS evaluation; use instantaneous rotation to see why. While paused/closed, telemetry capture stops after a short lease. Historical thresholds are preserved when settings change. Pickup classification and LED ownership are unchanged.</footer>
 <script>
 'use strict';
+
+// Fixed browser wall-clock mapping per device boot; later network jitter cannot move points.
+const pageWallOrigin=Date.now()-performance.now(),deviceClocks=new Map();
+function syncDeviceClock(data,received=performance.now()){
+ if(!Number.isInteger(data.uptime_ms)||data.uptime_ms<0||data.uptime_ms>0xFFFFFFFF)throw new Error('Invalid device time');
+ const boot=data.boot_id??0,uptime=data.uptime_ms>>>0;
+ let clock=deviceClocks.get(boot);
+ if(!clock){
+  const timing=data._requestTiming;
+  const midpoint=timing?(timing.sent+timing.received)/2:received;
+  clock={uptime,epoch:pageWallOrigin+midpoint};deviceClocks.set(boot,clock);
+  if(deviceClocks.size>4)deviceClocks.delete(deviceClocks.keys().next().value);
+ }else{
+  const advance=(uptime-clock.uptime)|0;
+  if(advance>0){clock.epoch+=advance;clock.uptime=uptime;}
+ }
+ return {epoch:sample=>clock.epoch+((sample-clock.uptime)|0)};
+}
+function formatClock(epoch,fractional=false){
+ if(!Number.isFinite(epoch))return '—';
+ const date=new Date(epoch),text=date.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+ return text+(fractional?'.'+String(date.getMilliseconds()).padStart(3,'0'):'');
+}
+function formatPlotDate(epoch){return new Date(epoch).toLocaleDateString()+' · '+Intl.DateTimeFormat().resolvedOptions().timeZone;}
+function selectedSeconds(id,fallback=600){
+ const seconds=Number($(id).value);return [15,30,60,120,300,600].includes(seconds)?seconds:fallback;
+}
+
 const $=id=>document.getElementById(id);
 const colors=['#8db4d6','#86b8ad','#c9b789','#79b5a3','#a6a2c9'];
 // Each trace maps to an actual firmware measurement or a threshold snapshot in the same row.
@@ -516,11 +578,12 @@ let debugBoot=0;
 function ingest(data){
  if(!Array.isArray(data.columns)||!Array.isArray(data.rows)||!Number.isFinite(data.uptime_ms))throw new Error('Invalid debug stream');
  if(data.columns[0]!=='sequence'||data.columns[1]!=='uptime_ms'||new Set(data.columns).size!==data.columns.length)throw new Error('Invalid debug schema');
- if(lastUptime!==null&&((debugBoot&&data.boot_id!==debugBoot)||data.uptime_ms<lastUptime)){rows=[];lastSequence=0;lost=0;}
+ if(lastUptime!==null&&((debugBoot&&data.boot_id!==debugBoot)||(!data.boot_id&&data.uptime_ms<lastUptime))){rows=[];lastSequence=0;lost=0;}
+ const clock=syncDeviceClock(data);
  debugBoot=data.boot_id??0;
  lastUptime=data.uptime_ms;columns=data.columns.map(k=>gyroUnitMap[k]||k);
  for(const packed of data.rows){
-  if(!Array.isArray(packed)||packed.length!==columns.length||!Number.isInteger(packed[0])||packed[0]<1||!packed.every(v=>v===null||Number.isFinite(v)))throw new Error('Invalid telemetry package');
+  if(!Array.isArray(packed)||packed.length!==columns.length||!Number.isInteger(packed[0])||packed[0]<1||!Number.isInteger(packed[1])||packed[1]<0||packed[1]>0xFFFFFFFF||!packed.every(v=>v===null||Number.isFinite(v)))throw new Error('Invalid telemetry package');
  }
  for(let i=1;i<data.rows.length;i++)if(data.rows[i][0]<=data.rows[i-1][0])throw new Error('Unordered telemetry');
  for(const packed of data.rows){
@@ -530,6 +593,7 @@ function ingest(data){
   if(lastSequence&&point.sequence>lastSequence+1)lost+=point.sequence-lastSequence-1;
   point.noise_ratio=point.baseline_noise>0&&point.accel_deviation!==null?point.accel_deviation/point.baseline_noise:null;
   point.required_ratio=point.baseline_noise>0&&point.effective_accel!==null?point.effective_accel/point.baseline_noise:null;
+  point.epoch_ms=clock.epoch(point.uptime_ms>>>0);point.timestamp_iso=new Date(point.epoch_ms).toISOString();
   annotate(point,rows.at(-1));rows.push(point);lastSequence=point.sequence;
  }
  if(rows.length>20000)rows.splice(0,rows.length-20000);
@@ -542,15 +606,15 @@ function ingest(data){
   const reason=!latest.valid?'Sensor data unavailable: quiet evidence cannot accumulate.':latest.quiet_block_mask?'Quiet timer blocked by '+maskNames(latest.quiet_block_mask,quietNames)+'.':latest.active?'Waiting for the full stationary window.':latest.armed?'Armed. Current trigger-limit exceedances: '+(maskNames(latest.trigger_mask,triggerNames)||'none')+'.':'Learning stationary baseline.';
   $('status').textContent+=' · '+reason;
  }
- $('eventLog').innerHTML=rows.flatMap(r=>(r.markers||[]).map(m=>'<div><strong style="color:'+m.color+'">'+(r.uptime_ms/1000).toFixed(2)+' s</strong> · '+esc(m.label)+'</div>')).slice(-12).reverse().join('')||'No captured events. Times are seconds since boot; missing records are not inferred.';
- $('captureInfo').textContent=rows.length+' points · '+lost+' missing records';
+ $('eventLog').innerHTML=rows.flatMap(r=>(r.markers||[]).map(m=>'<div><strong style="color:'+m.color+'">'+formatClock(r.epoch_ms,true)+'</strong> · '+esc(m.label)+'</div>')).slice(-12).reverse().join('')||'No captured events. Times use the browser local clock; missing records are not inferred.';
+ $('captureInfo').textContent=rows.length+' points · '+lost+' missing records · '+(rows.length?formatPlotDate(rows.at(-1).epoch_ms):'Local clock time');
 }
 /* Draw without invented smoothing. Missing sequence/time intervals and nulls break lines. */
 function draw(){
- const seconds=Number($('window').value)||60;
- const end=rows.length?rows[rows.length-1].uptime_ms:0,start=rows.length?Math.max(end-seconds*1000,rows[0].uptime_ms):0,span=Math.max(50,end-start);
- rows=rows.filter(p=>p.uptime_ms>=end-600000);
- const visible=rows.filter(p=>p.uptime_ms>=start),latest=visible.at(-1);
+ const seconds=selectedSeconds('window',60);
+ const end=rows.length?rows[rows.length-1].epoch_ms:0,start=rows.length?Math.max(end-seconds*1000,rows[0].epoch_ms):0,span=Math.max(50,end-start);
+ rows=rows.filter(p=>p.epoch_ms>=end-600000);
+ const visible=rows.filter(p=>p.epoch_ms>=start),latest=visible.at(-1);
  for(const p of plotSpecs){
   const canvas=$('plot-'+p.id),w=canvas.clientWidth||600,h=220,ratio=window.devicePixelRatio||1;
   if(canvas.width!==Math.round(w*ratio)||canvas.height!==Math.round(h*ratio)){canvas.width=Math.round(w*ratio);canvas.height=Math.round(h*ratio);}
@@ -561,25 +625,25 @@ function draw(){
   const pad=Math.max((hi-lo)*.08,.01);lo-=pad;hi+=pad;
   c.font='11px system-ui';c.fillStyle='#a5b1bf';c.textAlign='left';c.fillText(p.unit,left,13);
   for(let i=0;i<=4;i++){const y=top+(bottom-top)*i/4;c.strokeStyle='#344253';c.setLineDash([]);c.beginPath();c.moveTo(left,y);c.lineTo(right,y);c.stroke();c.fillText((hi-(hi-lo)*i/4).toFixed(hi>100?0:3),2,y+4);}
-  for(const f of [0,.5,1]){c.textAlign=f===0?'left':f===1?'right':'center';c.fillText(((start+f*span-end)/1000).toFixed(1),left+f*(right-left),h-8);}
+  for(const f of [0,.5,1]){c.textAlign=f===0?'left':f===1?'right':'center';c.fillText(formatClock(rows.length?start+f*span:pageWallOrigin,span<=30000),left+f*(right-left),h-8);}
   for(const t of p.traces){
    c.strokeStyle=colors[t[2]];c.lineWidth=t[3]?1.5:2;c.setLineDash(t[3]?[6,4]:[]);c.beginPath();let previous=null;
    for(const row of visible){
     const value=row[t[1]];if(!Number.isFinite(value)){previous=null;continue;}
-    const x=left+(row.uptime_ms-start)/span*(right-left),y=bottom-(value-lo)/(hi-lo)*(bottom-top);
-    if(!previous||row.sequence!==previous.sequence+1||row.uptime_ms-previous.uptime_ms>250)c.moveTo(x,y);else c.lineTo(x,y);previous=row;
+    const x=left+(row.epoch_ms-start)/span*(right-left),y=bottom-(value-lo)/(hi-lo)*(bottom-top);
+    if(!previous||row.sequence!==previous.sequence+1||row.epoch_ms-previous.epoch_ms>250)c.moveTo(x,y);else c.lineTo(x,y);previous=row;
    }c.stroke();
   }
   c.setLineDash([]);
   // Vertical event markers share timestamps across plots; small labels distinguish confirmation from clearing.
   for(const row of visible)for(const marker of row.markers||[]){
    if(!markerApplies(marker,p.id))continue;
-   const x=left+(row.uptime_ms-start)/span*(right-left);
+   const x=left+(row.epoch_ms-start)/span*(right-left);
    c.strokeStyle=marker.color;c.lineWidth=1;c.globalAlpha=.7;c.setLineDash([3,3]);
    c.beginPath();c.moveTo(x,top);c.lineTo(x,bottom);c.stroke();c.setLineDash([]);c.globalAlpha=1;
    c.fillStyle=marker.color;c.textAlign='left';c.fillText(markerLabel(marker,p.id),Math.min(x+3,right-42),top+11);
   }
-  canvas.title='Red CAUSE: this signal exceeded its limit at confirmation. Red ALERT*: another signal caused confirmation. Amber RESET: quiet evidence restarted. Green CLEAR: full quiet window completed. See recent events for exact causes and boot-relative timestamps.';
+  canvas.title='Red CAUSE: this signal exceeded its limit at confirmation. Red ALERT*: another signal caused confirmation. Amber RESET: quiet evidence restarted. Green CLEAR: full quiet window completed. See recent events for exact causes and local clock timestamps.';
   $('legend-'+p.id).innerHTML=p.traces.map(t=>'<span><i class="swatch" style="background:'+colors[t[2]]+'"></i>'+esc(t[0])+': <em>'+((latest&&Number.isFinite(latest[t[1]]))?latest[t[1]].toFixed(3):'unavailable')+'</em></span>').join('');
   if(!values.length){c.fillStyle='#a5b1bf';c.textAlign='left';c.fillText('Waiting for applicable telemetry',left+8,(top+bottom)/2);}
  }
@@ -589,7 +653,7 @@ async function poll(){
  const started=performance.now();
  if(!paused){
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),2000);
-  try{const response=await fetch('/api/pickup/debug?client='+debugClient+'&boot='+debugBoot+'&ack='+lastSequence,{cache:'no-store',signal:controller.signal});if(!response.ok)throw new Error('HTTP '+response.status);ingest(await response.json());lastContact=performance.now();$('error').textContent='';draw();}
+  try{const sent=performance.now();const response=await fetch('/api/pickup/debug?client='+debugClient+'&boot='+debugBoot+'&ack='+lastSequence,{cache:'no-store',signal:controller.signal});if(!response.ok)throw new Error('HTTP '+response.status);const data=await response.json();data._requestTiming={sent,received:performance.now()};ingest(data);lastContact=performance.now();$('error').textContent='';draw();}
   catch(error){$('error').textContent='Telemetry unavailable: '+error.message+(lastContact?' · last contact '+Math.round((performance.now()-lastContact)/1000)+' s ago':'');}
   finally{clearTimeout(timeout);}
  }
@@ -601,7 +665,7 @@ $('window').addEventListener('change',draw);window.addEventListener('resize',dra
 /* Export numeric samples plus their historical thresholds for offline threshold analysis. */
 $('export').addEventListener('click',()=>{
  if(!rows.length)return;
- const header=[...columns,'noise_ratio','required_ratio'];
+ const header=['timestamp_iso','epoch_ms',...columns,'noise_ratio','required_ratio'];
  const csv=[header.join(','),...rows.map(p=>header.map(k=>p[k]??'').join(','))].join('\n');
  const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download='pickup-debug.csv';a.click();URL.revokeObjectURL(url);
 });

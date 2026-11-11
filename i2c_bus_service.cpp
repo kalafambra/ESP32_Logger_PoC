@@ -8,7 +8,7 @@
 #include "acquisition_timing.h"
 
 namespace {
-constexpr unsigned CAPACITY = 128;
+constexpr unsigned CAPACITY = ACQUISITION_QUEUE_CAPACITY;
 struct Command { void (*function)(void *); void *argument; };
 StaticQueue_t queueControl;
 uint8_t queueStorage[CAPACITY * sizeof(SensorPacket)];
@@ -159,7 +159,7 @@ void processSensorPackets() {
   if (!samples) return;
   static uint32_t seenGeneration = 0;
   SensorPacket packet;
-  // Bounded work per loop; acquisition never waits for this consumer.
+  // Bounded work per processing wake; acquisition never waits for this consumer.
   for (unsigned i = 0; i < CAPACITY && xQueueReceive(samples, &packet, 0) == pdTRUE; ++i) {
     ProcessingStateLock lock;
     if (packet.generation != seenGeneration) {

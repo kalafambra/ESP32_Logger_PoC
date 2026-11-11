@@ -19,7 +19,7 @@
 void setup() {
   Serial.begin(115200);
   Serial.println("\nESP32 BME280: 5 Hz acquisition, 1 s mean/min/max, SDA=21 SCL=22");
-  setupEnvironmentHistory();
+  setupDashboardDelivery();
   setupPickup();
   setupPickupEvents();
   setupOta();

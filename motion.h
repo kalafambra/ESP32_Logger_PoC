@@ -67,6 +67,4 @@ bool beginMotionCalibration();
 bool beginGyroCalibration();
 MotionTemperature motionTemperature();
 MotionStatus motionStatus();
-// Borrowed reports: processing owner only. HTTP uses copyMotionDashboard().
-const MotionReport &latestMotionReport();
 MotionDiagnostics readMotionDiagnostics(); // Checked I2C request executed by owner.

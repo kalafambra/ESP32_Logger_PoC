@@ -22,6 +22,8 @@ async function main(){
  vm.runInContext(script,sandbox);await new Promise(resolve=>setImmediate(resolve));
  assert.equal(read('plotSpecs.map(p=>p.id).join(",")'),'movement,tilt,rotation,quiet-gyro,quiet-time,persistence','only the six requested plots remain');
  assert.equal(read('rows.length'),1);assert.equal(read('rows[0].noise_ratio'),10);
+ assert.ok(Number.isFinite(read('rows[0].epoch_ms')),'tuning stores absolute timestamps');
+ assert.ok(Math.abs(Date.parse(read('rows[0].timestamp_iso'))-read('rows[0].epoch_ms'))<1,'ISO and epoch export agree');
  assert.equal(read('rows[0].required_ratio'),30);assert.ok(timers.includes(200),'5 Hz batched polling');
  assert.ok(commands.some(d=>d.length===2),'thresholds use dashed lines');
  assert.equal(elements.get('setting-stationary_ms').value,'3000');

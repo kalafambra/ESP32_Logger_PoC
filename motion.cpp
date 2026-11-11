@@ -625,9 +625,6 @@ MotionStatus motionStatus() {
   return status;
 }
 
-const MotionReport &latestMotionReport() {
-  return motionLatest;
-}
 MotionDiagnostics readMotionDiagnosticsOwner() {
   MotionDiagnostics result;
   result.enabled = I2C_SENSORS_ENABLED;

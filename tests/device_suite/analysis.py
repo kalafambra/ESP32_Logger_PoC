@@ -169,8 +169,8 @@ class Phase:
         if stream == "readings":
             if seq > seed and (not data.get("sensor_ok") or data.get("sample_count") != 5):
                 self.error("sensor", f"BME report {seq}: n={data.get('sample_count')}, {data.get('error') or 'invalid report'}")
-            if not data.get("history_self_tests_passed", False):
-                self.error("sensor", "Firmware history self-tests not passing or not exposed")
+            if not data.get("delivery_self_tests_passed", data.get("history_self_tests_passed", False)):
+                self.error("sensor", "Firmware delivery self-tests not passing or not exposed")
             self.check_motion(data, at)
         else:
             self.check_motion(data, at)
