@@ -1,0 +1,43 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
+const source=fs.readFileSync(path.join(__dirname,'..','web_assets.cpp'),'utf8');
+const scripts=[...source.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
+for(const script of scripts){
+ const start=script.indexOf('const pageWallOrigin='),end=script.indexOf('\n}',script.indexOf('function selectedSeconds'))+2;
+ let wall=Date.UTC(2026,10,11,12),mono=1000,selection='15';
+ class BrowserDate extends Date { static now(){return wall;} }
+ const c={Date:BrowserDate,performance:{now:()=>mono},$:()=>({value:selection})};
+ vm.createContext(c);vm.runInContext(script.slice(start,end),c);
+ const read=s=>vm.runInContext(s,c);
+ c.packet={boot_id:1,uptime_ms:10000,_requestTiming:{sent:1000,received:1200}};
+ read('firstClock=syncDeviceClock(packet)');
+ const first=read('firstClock.epoch(9500)');
+ assert.equal(first,wall-400,'header maps to request midpoint; sample uses device time');
+ mono=7000;c.packet={boot_id:1,uptime_ms:11000,_requestTiming:{sent:2000,received:7000}};
+ read('laterClock=syncDeviceClock(packet)');
+ assert.equal(read('laterClock.epoch(9500)'),first,'slow later response cannot shift existing timestamps');
+ c.packet={boot_id:1,uptime_ms:10500};read('syncDeviceClock(packet)');
+ assert.equal(read('firstClock.epoch(9500)'),first,'older response does not rewind clock mapping');
+ const label=read('formatClock(firstClock.epoch(9500),true)');
+ assert.match(label,/\d{2}:\d{2}:\d{2}\.\d{3}/,'axis uses clock time, not seconds ago');
+ wall+=3600000;assert.equal(read('firstClock.epoch(9500)'),first,'wall-clock adjustment cannot move acquired points');
+ c.packet={boot_id:2,uptime_ms:100};read('newClock=syncDeviceClock(packet)');
+ assert.notEqual(read('newClock.epoch(100)'),read('firstClock.epoch(100)'),'new boot establishes a separate mapping');
+ c.packet={boot_id:3,uptime_ms:0xFFFFFF00};read('wrapClock=syncDeviceClock(packet)');
+ const before=read('wrapClock.epoch(0xFFFFFF00)');
+ c.packet={boot_id:3,uptime_ms:0x100};read('syncDeviceClock(packet)');
+ assert.equal(read('wrapClock.epoch(0x100)'),before+512,'32-bit uptime wrap preserves absolute elapsed time');
+ assert.equal(read('selectedSeconds("range")'),15);
+ selection='300';assert.equal(read('selectedSeconds("range")'),300);
+ selection='-1';assert.equal(read('selectedSeconds("range")'),600);
+ assert.equal(read('selectedSeconds("range",60)'),60);
+}
+const main=scripts[0],range=main.match(/function timeRange\([^]*?\n\}/)[0];
+const c={};vm.createContext(c);vm.runInContext(range,c);
+c.records=Array.from({length:61},(_,i)=>({at:i*1000}));
+assert.equal(vm.runInContext('timeRange(60000,records,15).span',c),15000);
+assert.equal(c.records.length,61,'changing visible range cannot delete retained history');
+assert.equal(vm.runInContext('timeRange(60000,records,600).span',c),60000,'expanding restores older retained points');
+for(const id of ['tempChart','humChart','pressureChart','motionChart'])assert.ok(source.includes('id="'+id+'Range"'));
+assert.ok(!source.includes('Time relative to now'));
+assert.ok(source.includes("const header=['timestamp_iso','epoch_ms',...columns"));
+console.log('PASS: absolute sample timestamps, fixed RTT anchor, restart/wrap mapping and independent visible ranges');
