@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+constexpr unsigned ACQUISITION_QUEUE_CAPACITY = 128;
 
 // Acquisition owns Wire; the processing worker owns algorithms and published state.
 enum class SensorPacketKind : uint8_t { Motion, MotionFault, Environment, EnvironmentFault,

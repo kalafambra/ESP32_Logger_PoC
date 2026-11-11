@@ -7,6 +7,8 @@ The default build is **BLE-free** and uses the original ESP32 `default`
 partition scheme. BLE code is preserved and can be enabled with `--ble`.
 See [BUILD_VARIANTS.md](BUILD_VARIANTS.md) for both variants, USB repartitioning
 and the restoration guide for future changes.
+See [ACQUISITION.md](ACQUISITION.md) for final task ownership, delivery/timestamp
+contracts, automated checks and the hardware acceptance checklist.
 
 ## Current acquisition and publication rates
 
@@ -29,10 +31,9 @@ MPU temperature is read from signed TEMP_OUT_H/L (0x41/0x42), using
 `raw / 340 + 36.53` from the [manufacturer register map](https://invensense.tdk.com/wp-content/uploads/2015/02/MPU-6000-Register-Map.pdf).
 It measures chip temperature, so it may differ from the BME280 ambient reading.
 The extra read does not enable temperature in the FIFO or change its 12-byte layout.
-Both temperature series share the 30-second fine / older 30-second average
-history. Missing MPU temperatures make gaps independently of BME status;
-partial temperature failure within a coarse bucket makes that sensor's bucket
-unavailable. Dew point continues using the BME280 reading.
+Both temperature series use browser-owned one-second plot history. Missing MPU
+temperatures make gaps independently of BME status. Dew point continues using
+the BME280 reading.
 Current MPU temperature and its independent health/error are available as
 `motion.temperature_c`, `motion.temperature_ok`, `motion.temperature_error`;
 history rows include `mpu_temperature_c`. Serial motion reports include chip T.
@@ -41,13 +42,15 @@ history rows include `mpu_temperature_c`. Serial motion reports include chip T.
 
 All firmware sources stay at the sketch root so Arduino compiles the `.cpp` files
 automatically. Headers describe interfaces and data; implementations own mutable
-state in their `.cpp` files. Tiny arithmetic helpers, constants and the history
-visitor templates remain in headers.
+state in their `.cpp` files. Tiny arithmetic helpers, constants and bounded
+delivery templates remain in headers.
 
 | Files | Responsibility |
 | --- | --- |
 | `ESP32_1.ino` | Hardware startup and cooperative service order |
-| `environment.h/.cpp` | BME280 forced conversions, five-sample reports, timing counters and environmental history ownership |
+| `i2c_bus_service.h/.cpp` | Exclusive acquisition owner, processing worker, sample queue, commands and OTA coordination |
+| `acquisition_timing.h/.cpp` | Locked elapsed-time and sample-count diagnostics |
+| `environment.h/.cpp` | BME280 forced conversions, five-sample reports, timing counters and report delivery |
 | `dashboard_delivery.h/.cpp`, `aggregation.h` | Bounded ACK delivery buffers and channel statistics |
 | `motion.h/.cpp` | MPU6050 registers, ISR/FIFO, calibration, temperature, reports and diagnostic snapshots |
 | `microphone.h/.cpp` | INMP441 I2S/DMA capture, borrowed audio blocks and OTA pause/resume |
@@ -55,23 +58,21 @@ visitor templates remain in headers.
 | `audio_config.h`, `microphone_spectrum.h/.cpp` | Audio settings, frame feeding, power averaging and published spectrum |
 | `pickup_detector.h/.cpp` | Hardware-independent pickup state machine and thresholds |
 | `pickup_service.h/.cpp` | Detector integration, settings validation/persistence, debug subscription and exclusive LED timer |
-| `pickup_debug.h/.cpp`, `pickup_events.h/.cpp` | Leased debug history and persistent event journal |
+| `pickup_debug.h/.cpp`, `pickup_events.h/.cpp` | Leased telemetry delivery and persistent event journal |
 | `pickup_ble.h/.cpp` | Optional BLE service and callbacks using locked event snapshots |
 | `network_service.h/.cpp` | Wi-Fi callbacks/retries, time synchronization and deferred service startup |
 | `ota_service.h/.cpp` | OTA lifecycle and acquisition pause/recovery |
 | `http_api.h/.cpp` | Sole WebServer, all routes and response handling, plus the one-second idle-client deadline |
 | `web_assets.h/.cpp` | Flash-resident dashboard, tuning page and downloadable BLE UUID definitions |
-| `self_tests.h/.cpp` | Existing startup history/detector/journal checks, reusing live buffers |
+| `self_tests.h/.cpp` | Startup detector/journal checks; delivery tests live in `dashboard_delivery.cpp` |
 | `config.h`, `config.example.h` | Private credentials/GPIO settings and shareable example |
 
 The sketch initializes the shared Wire bus once. Wi-Fi reserves memory before
-I2S and optional BLE. Each loop drains audio before sensor work and after HTTP;
-it closes an environmental report before starting the next conversion. Keep
-these orders when adding services. OTA callbacks run through the loop service;
-the motion and LED ISRs and Wi-Fi/BLE callbacks have their own documented limits.
-Sensor reports and history are read-only views for HTTP; callers must consume
-them before the next service call. The event journal uses locked copies for
-concurrent BLE reads. NVS record formats and endpoint URLs are unchanged.
+I2S and optional BLE. The main loop services audio around HTTP while independent
+tasks own sensor acquisition and downstream processing. OTA callbacks wait for both
+owners to pause; the LED timer remains independent. HTTP copies bounded snapshots,
+then serializes and sends without holding state locks. The event journal uses locked
+copies for concurrent BLE reads. NVS formats and BLE APIs/UUIDs are unchanged.
 
 Use `network_service.h`, since `network.h` would shadow the ESP32 library's
 `Network.h` on Windows. After renaming source files, clean the Arduino build
@@ -125,7 +126,7 @@ and gives more wiring margin than the former 400 kHz setting. The LED is reserve
 
 ### INMP441 capture
 
-The current **microphone build** sets `I2C_SENSORS_ENABLED = false` in config.h
+The optional **microphone-only configuration** sets `I2C_SENSORS_ENABLED = false` in config.h
 and config.example.h. It never starts Wire, initializes BME280/MPU6050, or attaches
 the MPU interrupt. Low-level register helpers also reject calls without touching
 Wire, including calls from diagnostics and OTA recovery. Environmental/motion
@@ -375,31 +376,34 @@ upload a merged flash image or bootloader; use the sketch application .bin.
 
 ## Timing, buffering and errors
 
-BME forced x1 conversions are triggered every 200 ms, with completion checked
-after at least 15 ms and timeout at 80 ms. Each one-second window must contain
+BME forced x1 conversions are triggered every 200 ms. At the next deadline, the
+previous result is checked/read once before another conversion is triggered.
+Each one-second window must contain
 exactly five valid readings; missing readings or bus errors produce a null/error
 report instead of a partial average. Statistics are calculated before rounding.
 Each serial BME report includes current Wi-Fi status and IP, including errors.
 
 MPU uses DLPF=3 (44 Hz acceleration bandwidth) and sample divider=9 on the
 filtered 1 kHz clock, producing 100 Hz. Range is +/-2 g (16384 counts/g).
-The ISR only sets a flag and counts interrupt edges. I2C/aggregation run in the
-main loop, in batches up to 10 twelve-byte accel+gyro frames. A 5 ms safety poll handles lost
+The ISR sets a flag, counts interrupt edges and notifies acquisition. The acquisition
+task drains up to 10 twelve-byte accel+gyro frames per service; processing consumes
+them from a separate bounded queue. A 10 ms task-wait timeout handles lost
 notifications; missing INT edges produce a warning. IRQ edges may coalesce and
 must not be mistaken for the exact raw sample count.
 
 The 1024-byte FIFO holds about 85 accel+gyro frames, now about **0.85 seconds** of buffering.
 The one-second motion report typically contains about 100 samples; counts vary
-with sensor clock tolerance and scheduling. FIFO frames are grouped by when
-they are drained, so backlog can add latency. Means smooth/cancel fast vibration;
+with sensor clock tolerance and scheduling. FIFO sample times are estimates from
+nominal cadence and retrieval time; backlog can add latency. Means smooth/cancel fast vibration;
 per-axis minima/maxima remain available in JSON, not as a raw waveform stream.
 Overflow, failed I2C reads, empty windows or badly delayed publication mark the
 report invalid and reset framing when necessary. Stale limits are 2500 ms for
 both latest-report APIs. No NaN values are serialized.
 
-Acquisition has no deliberate blocking delay or conversion wait loop. I2C,
-serial and HTTP are synchronous, so rates remain best effort. Wire timeout is
-20 ms. Inspect actual counts/errors under browser load rather than assuming
+There is no conversion busy-wait loop. I2C is synchronous within acquisition;
+serial reporting belongs to processing and HTTP belongs to the main loop. Idle
+workers block on notifications instead of spinning. Wire timeout is 20 ms.
+Inspect actual counts/errors under browser load rather than assuming
 error-free timing. Sensor initialization failure requires repairing wiring and
 resetting; transient acquisition failures attempt recovery.
 
@@ -700,7 +704,8 @@ history becomes empty after the previous batch is acknowledged. Dropping a respo
 retries pending records; acknowledging a batch releases it. A device restart changes
 boot_id and clears browser history. Main plots cap memory at 720 points per stream;
 tuning caps at 20,000 points, in addition to the ten-minute time limit. Time-scale
-controls and absolute time axes remain for blocks 10–11.
+controls and absolute time axes are implemented; see [ACQUISITION.md](ACQUISITION.md)
+for their mapping, retention and verification contract.
 
 The API-only device-suite runner uses the ACK protocol; normal status-only probes do
 not disturb browser delivery. Its history profile no longer requires firmware coarse

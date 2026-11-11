@@ -24,7 +24,7 @@ static_assert(SAMPLE_INTERVAL_MS == 200, "5 Hz requires SAMPLE_INTERVAL_MS = 200
 SampleWindow window;
 PublishedSample latest;
 DashboardDelivery<PublishedSample, 4> delivery;
-bool environmentHistoryTestsPassed = false;
+bool deliveryTestsPassed = false;
 bool windowFailed = false;
 const char *sensorError = "Sensor not initialized";
 /*
@@ -272,10 +272,10 @@ void setupEnvironment() {
   }
 }
 
-void setupEnvironmentHistory() {
-  environmentHistoryTestsPassed = runDeliverySelfTests();
+void setupDashboardDelivery() {
+  deliveryTestsPassed = runDeliverySelfTests();
   Serial.printf("[delivery] ACK buffer self-tests: %s\n",
-                environmentHistoryTestsPassed ? "PASS" : "FAIL");
+                deliveryTestsPassed ? "PASS" : "FAIL");
 }
 void disableEnvironment() {
   sensorReady = false;
@@ -296,14 +296,11 @@ void discardEnvironmentWindow() {
   packet.sampleMs = acquisitionWindowStart;
   enqueueSensorPacket(packet);
 }
-const PublishedSample &latestEnvironmentSample() {
-  return latest;
-}
 EnvironmentStatus environmentStatus() {
   ProcessingStateLock processingLock;
   SensorStateLock lock;
   return {missedSampleDeadlines, lateConversionServices, missedReportDeadlines,
-          environmentHistoryTestsPassed};
+          deliveryTestsPassed};
 }
 void copyEnvironmentDashboard(EnvironmentDashboardSnapshot &snapshot, const DeliveryRequest &request) {
   ProcessingStateLock lock;

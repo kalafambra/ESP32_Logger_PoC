@@ -14,7 +14,7 @@ function fixture(enabled) {
   const context = {I2C_SENSORS_ENABLED: enabled, SDA_PIN: 21, SCL_PIN: 22,
     Serial: {begin(){}, println(){}}, millis: () => 1234,
     Wire: Object.fromEntries(['begin','setClock','setTimeOut'].map(name => [name, () => calls.push('Wire.'+name)]))};
-  const services = ['setupEnvironmentHistory','setupPickup','setupPickupEvents','setupOta',
+  const services = ['setupDashboardDelivery','setupPickup','setupPickupEvents','setupOta',
     'setupEnvironment','setupMotion','disableEnvironment','disableMotion','invalidatePickup',
     'resetEnvironmentWindow','setupNetwork','setupMicrophone','setupHttp','serviceOta',
     'serviceMicrophoneAudio','publishWindow','acquireSensor','acquireMotion','serviceHttp',
@@ -29,12 +29,12 @@ function fixture(enabled) {
 
 let f = fixture(true);
 f.run('setup');
-assert.deepEqual(f.calls, ['setupEnvironmentHistory','setupPickup','setupPickupEvents','setupOta',
+assert.deepEqual(f.calls, ['setupDashboardDelivery','setupPickup','setupPickupEvents','setupOta',
   'Wire.begin','Wire.setClock','Wire.setTimeOut','setupEnvironment','setupMotion','Wire.setClock',
   'resetEnvironmentWindow','setupNetwork','setupMicrophone','setupHttp','startAcquisition']);
 f = fixture(false);
 f.run('setup');
-assert.deepEqual(f.calls, ['setupEnvironmentHistory','setupPickup','setupPickupEvents','setupOta',
+assert.deepEqual(f.calls, ['setupDashboardDelivery','setupPickup','setupPickupEvents','setupOta',
   'disableEnvironment','disableMotion','invalidatePickup','resetEnvironmentWindow',
   'setupNetwork','setupMicrophone','setupHttp','startAcquisition']);
 f.calls.length = 0;

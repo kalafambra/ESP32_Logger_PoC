@@ -71,7 +71,9 @@ void sendReadings() {
   json +=
       ",\"history_mode\":\"browser\",\"delivery_capacity\":4";
   appendDeliveryInfo(json, snapshot->delivery.info);
-  json += ",\"history_self_tests_passed\":" + String(status.historyTestsPassed ? "true" : "false");
+  json += ",\"history_self_tests_passed\":" + String(status.deliveryTestsPassed ? "true" : "false");
+  // Compatibility alias above now refers to ACK-buffer tests, not removed plot history.
+  json += ",\"delivery_self_tests_passed\":" + String(status.deliveryTestsPassed ? "true" : "false");
   json += ",\"default_altitude_m\":" + String(DEFAULT_ALTITUDE_M, 2);
   json += ",\"sample_ms\":" + String(latest.sampleMs);
   json += ",\"sample_age_ms\":" + (latest.sequence ? String(age) : String("null"));
@@ -99,6 +101,7 @@ void sendReadings() {
     if (!first) json += ',';
     first = false;
     json += "{\"sequence\":" + String(point.sequence) +
+            ",\"sample_ms\":" + String(point.sampleMs) +
             ",\"age_ms\":" + String(now - point.sampleMs) +
             ",\"sample_count\":" + String(point.count) +
             ",\"ok\":" + String(point.ok ? "true" : "false");
@@ -224,6 +227,7 @@ void sendMotionReadings() {
     if (sent++)
       json += ',';
     json += "{\"sequence\":" + String(report.sequence) +
+            ",\"sample_ms\":" + String(report.sampleMs) +
             ",\"age_ms\":" + String(now - report.sampleMs) + ",\"ok\":";
     json += report.ok ? "true" : "false";
     // Counts and the original error survive backfill, so missed live polls
@@ -539,7 +543,7 @@ void setupHttp() {
            ",\"processing_running\":" + String(queue.processingRunning ? "true" : "false") +
            ",\"processing_stack_free_bytes\":" + String(queue.processingStackFreeBytes) +
            ",\"queue_depth\":" + String(queue.depth) +
-           ",\"queue_capacity\":128" +
+           ",\"queue_capacity\":" + String(ACQUISITION_QUEUE_CAPACITY) +
            ",\"queue_high_water\":" + String(queue.highWater) +
            ",\"queue_dropped\":" + String(queue.dropped) +
            ",\"acquisition_stack_free_bytes\":" + String(queue.stackFreeBytes) +
