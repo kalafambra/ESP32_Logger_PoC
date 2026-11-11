@@ -14,6 +14,8 @@
 #include "pickup_events.h"
 #include "pickup_ble.h"
 #include "web_assets.h"
+#include "acquisition_timing.h"
+#include "i2c_bus_service.h"
 
 namespace {
 WebServer server(80);
@@ -41,7 +43,8 @@ void appendChannel(String &json, const PublishedChannel &channel, bool ok) {
  * consistently to both current readings and historical extrema.
  */
 void sendReadings() {
-  const PublishedSample &latest = latestEnvironmentSample();
+  // Reports/history are loop-owned until processing moves to its own task (step 7).
+  const PublishedSample latest = latestEnvironmentSample();
   const EnvironmentHistory &history = environmentHistory();
   const EnvironmentStatus status = environmentStatus();
   const uint32_t now = millis();
@@ -128,7 +131,7 @@ void motionArray(String &json, const float *values, bool valid) {
 /* Expose measured sample counts and IRQ/overflow diagnostics rather than claiming the target rate
  * was achieved. */
 void appendMotion(String &json, uint32_t now) {
-  const MotionReport &motionLatest = latestMotionReport();
+  const MotionReport motionLatest = latestMotionReport();
   const MotionStatus status = motionStatus();
   const uint32_t interrupts = status.interrupts;
   const bool valid = motionLatest.sequence && motionLatest.ok &&
@@ -200,7 +203,7 @@ void appendMotion(String &json, uint32_t now) {
 /* Serve small incremental batches separately from the large, slow environmental-history endpoint.
  */
 void sendMotionReadings() {
-  const MotionReport &motionLatest = latestMotionReport();
+  const MotionReport motionLatest = latestMotionReport();
   const uint32_t now = millis();
   uint32_t since = server.hasArg("since") ? strtoul(server.arg("since").c_str(), nullptr, 10) : 0;
   if (since > motionLatest.sequence)
@@ -523,6 +526,36 @@ void serviceHttpClients(WebServer &http) {
 } // namespace
 
 void setupHttp() {
+  server.on("/api/timing", HTTP_GET, []() {
+    const AcquisitionTiming snapshot = acquisitionTimingSnapshot();
+    const AcquisitionQueueStatus queue = acquisitionQueueStatus();
+    String json;
+    json.reserve(1100);
+    json = "{\"uptime_ms\":" + String(millis()) +
+           ",\"acquisition_running\":" + String(queue.running ? "true" : "false") +
+           ",\"queue_depth\":" + String(queue.depth) +
+           ",\"queue_capacity\":128" +
+           ",\"queue_high_water\":" + String(queue.highWater) +
+           ",\"queue_dropped\":" + String(queue.dropped) +
+           ",\"acquisition_stack_free_bytes\":" + String(queue.stackFreeBytes) +
+           ",\"environment_samples\":" + String(snapshot.environmentSamples) +
+           ",\"motion_frames\":" + String(snapshot.motionFrames);
+    auto append = [&](const char *name, const ServiceTiming &s) {
+      json += ",\""; json += name;
+      json += "\":{\"calls\":" + String(s.calls) +
+              ",\"last_us\":" + String(s.lastUs) +
+              ",\"max_us\":" + String(s.maxUs) +
+              ",\"mean_us\":" + String(s.calls ? double(s.totalUs) / s.calls : 0.0, 2) +
+              ",\"max_start_gap_us\":" + String(s.maxGapUs) + "}";
+    };
+    append("loop", snapshot.loop);
+    append("environment", snapshot.environment);
+    append("motion", snapshot.motion);
+    append("http", snapshot.http);
+    json += '}';
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "application/json", json);
+  });
   /* Serve the embedded page from flash so the dashboard needs no filesystem/internet. */
   server.on("/", HTTP_GET, []() {
     server.sendHeader("Cache-Control", "no-store");
@@ -577,6 +610,7 @@ void startHttp() {
   httpStarted = true;
 }
 void serviceHttp() {
+  ScopedServiceTiming timing(acquisitionTiming().http);
   if (httpStarted)
     serviceHttpClients(server);
 }

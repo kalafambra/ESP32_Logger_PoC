@@ -11,6 +11,8 @@
 #include "network_service.h"
 #include "ota_service.h"
 #include "http_api.h"
+#include "acquisition_timing.h"
+#include "i2c_bus_service.h"
 
 // Startup order matters on ESP32-WROOM: reuse live buffers for self-tests,
 // initialize the shared I2C bus once, then reserve Wi-Fi memory before I2S/BLE.
@@ -41,22 +43,24 @@ void setup() {
   setupNetwork();
   setupMicrophone();
   setupHttp();
-  resetEnvironmentWindow(millis());
+  if (!startAcquisition()) {
+    Serial.println("[sensors] Acquisition task allocation failed; acquisition stopped");
+    invalidateMotionProcessing("Acquisition task allocation failed");
+    invalidateEnvironmentProcessing("Acquisition task allocation failed");
+  }
 }
 
-// Preserve this service order: DMA is drained around synchronous I2C/HTTP,
-// and a BME report closes before a conversion enters the next sample window.
-// An active OTA transfer temporarily owns loop(); the LED timer is independent.
+// Processing remains on loop for step 6. Acquisition/I2C runs independently.
+// Drain samples around HTTP; OTA explicitly pauses the acquisition owner.
 void loop() {
+  ScopedServiceTiming loopTiming(acquisitionTiming().loop);
   serviceOta();
   serviceMicrophoneAudio();
-  publishWindow(millis());
-  acquireSensor();
-  acquireMotion();
+  processSensorPackets();
   serviceHttp();
   serviceMicrophoneAudio();
   logMicrophoneDiagnostics();
-  acquireMotion();
+  processSensorPackets();
   const uint32_t now = millis();
   servicePickup(now);
   servicePickupBle();

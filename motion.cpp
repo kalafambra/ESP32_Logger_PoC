@@ -4,6 +4,8 @@
 #include <Preferences.h>
 #include "config.h"
 #include "pickup_service.h"
+#include "acquisition_timing.h"
+#include "i2c_bus_service.h"
 
 namespace {
 
@@ -18,6 +20,7 @@ double gyroCalibrationSum[3] = {}, gyroCalibrationSquares[3] = {};
 bool motionReady = false, motionPaused = false, motionWindowFailed = false, motionSettled = false;
 uint32_t motionLastReport = 0, motionLastService = 0, motionOverflowCount = 0;
 uint32_t motionStartedAt = 0;
+uint32_t lastProcessedMotionMs = 0;
 const char *motionError = "MPU6050 not initialized";
 portMUX_TYPE motionMux = portMUX_INITIALIZER_UNLOCKED;
 volatile bool motionInterruptPending = false;
@@ -25,8 +28,10 @@ volatile uint32_t motionInterrupts = 0;
 float motionBias[3] = {};
 bool motionCalibrating = false;
 unsigned motionCalibrationSamples = 0;
+uint32_t motionCalibrationStartedMs = 0;
 double motionCalibrationSum[3] = {}, motionCalibrationSquares[3] = {};
 const char *motionCalibrationError = "";
+const char *motionProcessingError = "";
 float motionTemperatureC = 0;
 bool motionTemperatureOk = false;
 uint32_t motionTemperatureMs = 0;
@@ -53,6 +58,7 @@ void ARDUINO_ISR_ATTR motionDataReadyISR() {
   motionInterruptPending = true;
   ++motionInterrupts;
   portEXIT_CRITICAL_ISR(&motionMux);
+  notifyAcquisitionFromISR();
 }
 
 /* Keep register reads on the shared bus in normal task context, checking short replies.
@@ -150,12 +156,11 @@ bool verifyMotionConfiguration() {
 /* Reset framing on bus/overflow faults and mark this report as incomplete rather than averaging bad
  * data. */
 void motionFault(const char *message) {
-  invalidatePickup(message);
-  if (motionCalibrating) {
-    motionCalibrating = false;
-    motionCalibrationError = "Calibration cancelled by sensor read error";
-  }
-  motionWindowFailed = true;
+  SensorPacket packet;
+  packet.kind = SensorPacketKind::MotionFault;
+  packet.error = message;
+  packet.sampleMs = millis();
+  enqueueSensorPacket(packet);
   motionError = message;
   if (!resetMotionFifo())
     motionError = "MPU6050 I2C/FIFO recovery failed";
@@ -259,20 +264,25 @@ void finishMotionCalibration() {
 
 /* Publish a one-second aggregate instead of flooding serial and Wi-Fi with 100 raw frames/s. */
 void publishMotion(uint32_t now) {
-  if (now - motionLastReport < MOTION_REPORT_MS)
+  if (int32_t(now - motionLastReport) < int32_t(MOTION_REPORT_MS))
     return;
   motionLatest = MotionReport{};
   motionLatest.sequence =
       motionHistoryCount
           ? motionReports[(motionHead + MOTION_HISTORY_SIZE - 1) % MOTION_HISTORY_SIZE].sequence + 1
           : 1;
-  motionLatest.sampleMs = now;
+  motionLatest.sampleMs = motionLastReport +
+                         ((now - motionLastReport) / MOTION_REPORT_MS) * MOTION_REPORT_MS;
   motionLatest.samples = motionSamples;
-  motionLatest.ok = motionReady && !motionWindowFailed && motionSamples > 0 &&
+  bool ready;
+  const char *hardwareError;
+  { SensorStateLock lock; ready = motionReady; hardwareError = motionError; }
+  motionLatest.ok = ready && !motionWindowFailed && motionSamples > 0 &&
                     now - motionLastReport <= MOTION_REPORT_MS + 200;
   motionLatest.error = motionLatest.ok ? ""
-                       : motionWindowFailed || !motionReady
-                           ? motionError
+                       : motionWindowFailed
+                           ? motionProcessingError
+                       : !ready ? hardwareError
                            : "No samples or delayed one-second report";
   for (unsigned i = 0; i < 3; ++i) {
     motionLatest.mean[i] = motionSamples ? motionSum[i] / motionSamples : 0;
@@ -287,8 +297,8 @@ void publishMotion(uint32_t now) {
   motionHead = (motionHead + 1) % MOTION_HISTORY_SIZE;
   if (motionHistoryCount < MOTION_HISTORY_SIZE)
     ++motionHistoryCount;
-  const String temperatureText =
-      motionTemperatureOk ? String(motionTemperatureC, 2) : String("unavailable");
+  const MotionTemperature chip = motionTemperature();
+  const String temperatureText = chip.ok ? String(chip.celsius, 2) : String("unavailable");
   if (motionLatest.ok)
     Serial.printf("[mpu %lu, n=%u] mean X=%.3f Y=%.3f Z=%.3f m/s^2 | chip T=%s C\n",
                   (unsigned long)motionLatest.sequence, motionSamples, motionLatest.mean[0],
@@ -296,15 +306,9 @@ void publishMotion(uint32_t now) {
   else
     Serial.printf("[mpu %lu, n=%u] %s\n", (unsigned long)motionLatest.sequence, motionSamples,
                   motionLatest.error);
-  if (!motionLatest.ok && (motionReadErrors || motionWriteErrors))
-    Serial.printf("[mpu bus] read-errors=%lu write-errors=%lu last-reg=0x%02X requested=%u "
-                  "received=%u write-status=%u clock=%lu Hz\n",
-                  (unsigned long)motionReadErrors, (unsigned long)motionWriteErrors,
-                  motionFailedRegister, motionFailedCount, motionReturnedBytes,
-                  motionWriteStatus, (unsigned long)Wire.getClock());
   motionSamples = 0;
   motionWindowFailed = false;
-  motionLastReport = now;
+  motionLastReport += ((now - motionLastReport) / MOTION_REPORT_MS) * MOTION_REPORT_MS;
 }
 
 static_assert(decodeMotionRaw(0x40, 0x00) == 16384, "+1 g decoding");
@@ -395,11 +399,6 @@ void acquireMotionTemperature(uint32_t now) {
 
 /* Suspend FIFO during OTA, since a firmware transfer intentionally blocks acquisition. */
 void pauseMotion() {
-  invalidatePickup("Acquisition paused for OTA; active alert retained");
-  if (motionCalibrating) {
-    motionCalibrating = false;
-    motionCalibrationError = "Calibration cancelled by OTA";
-  }
   motionPaused = true;
   if (motionReady) {
     motionWrite(0x38, 0);
@@ -410,12 +409,6 @@ void pauseMotion() {
 
 /* Recover from a failed OTA transfer without mixing pre-transfer and post-transfer samples. */
 void resumeMotion() {
-  motionSamples = 0;
-  for (unsigned i = 0; i < 3; ++i)
-    motionSum[i] = motionGyroSum[i] = 0;
-  motionWindowFailed = true;
-  motionError = "Acquisition interrupted by OTA";
-  motionLastReport = millis();
   if (motionReady && (!resetMotionFifo() || !motionWrite(0x38, 0x11)))
     motionReady = false;
   motionPaused = false;
@@ -427,6 +420,7 @@ void acquireMotion() {
     return;
   if (motionPaused)
     return;
+  ScopedServiceTiming timing(acquisitionTiming().motion);
   const uint32_t now = millis();
   // Discard sensor startup samples rather than mixing the settling period into a valid mean.
   if (motionReady && !motionSettled) {
@@ -435,7 +429,6 @@ void acquireMotion() {
     motionSettled = true;
     if (!resetMotionFifo())
       motionFault("MPU6050 startup FIFO reset failed");
-    motionLastReport = now;
   }
   bool pending;
   portENTER_CRITICAL(&motionMux);
@@ -461,41 +454,16 @@ void acquireMotion() {
             motionFault("MPU6050 FIFO read failed");
           else
             for (unsigned frame = 0; frame < frames; ++frame) {
-              float detectorA[3], detectorW[3];
-              const bool wasCalibrating = motionCalibrating;
-              for (unsigned axis = 0; axis < 3; ++axis) {
-                const unsigned offset = frame * 12 + axis * 2;
-                const int32_t raw = decodeMotionRaw(data[offset], data[offset + 1]);
-                const float value = raw * (9.80665f / 16384.0f); // +/-2 g, includes gravity.
-                if (motionCalibrating) {
-                  motionCalibrationSum[axis] += value;
-                  motionCalibrationSquares[axis] += double(value) * value;
-                }
-                const float corrected =
-                    value -
-                    motionBias[axis]; // Constant bias subtraction, never normalization/clipping.
-                detectorA[axis] = corrected;
-                const int32_t gyro = decodeMotionRaw(data[offset + 6], data[offset + 7]);
-                detectorW[axis] =
-                    gyro * (3.14159265358979323846f / (180.0f * 131.0f)); // +/-250 deg/s -> rad/s.
-                if (motionCalibrating && motionGyroCalibrating) {
-                  gyroCalibrationSum[axis] += detectorW[axis];
-                  gyroCalibrationSquares[axis] += double(detectorW[axis]) * detectorW[axis];
-                }
-                detectorW[axis] -= motionGyroBias[axis]; // Persisted zero-rate correction, also
-                                                         // used by pickup baseline learning.
-                motionGyroSum[axis] += detectorW[axis];
-                motionSum[axis] += corrected;
-                if (!motionSamples || corrected < motionMin[axis])
-                  motionMin[axis] = corrected;
-                if (!motionSamples || corrected > motionMax[axis])
-                  motionMax[axis] = corrected;
-              }
-              ++motionSamples;
-              if (motionCalibrating && ++motionCalibrationSamples >= 500)
-                finishMotionCalibration();
-              if (!wasCalibrating)
-                processPickupSample(detectorA, detectorW, millis());
+              SensorPacket packet;
+              packet.kind = SensorPacketKind::Motion;
+              // Nominal cadence estimate anchored to FIFO-count retrieval; not hardware timestamps.
+              packet.retrievedMs = now;
+              packet.sampleMs = now - (bytes / 12 - 1 - frame) * 10;
+              static uint32_t sequence = 0;
+              packet.sequence = ++sequence;
+              memcpy(packet.raw, data + frame * 12, 12);
+              enqueueSensorPacket(packet);
+              countMotionFrame();
             }
         }
         // Keep draining a backlog on the next loop pass even if the IRQ was coalesced.
@@ -507,14 +475,94 @@ void acquireMotion() {
       }
     }
   }
-  publishMotion(millis());
+}
+
+
+
+void invalidateMotionProcessing(const char *message) {
+  invalidatePickup(message);
+  motionWindowFailed = true;
+  motionProcessingError = message;
+  if (motionCalibrating) {
+    motionCalibrating = false;
+    motionCalibrationError = "Calibration cancelled by acquisition discontinuity";
+  }
+}
+
+void processMotionPacket(const SensorPacket &packet) {
+  if (packet.kind == SensorPacketKind::MotionFault) {
+    invalidateMotionProcessing(packet.error);
+    return;
+  }
+  if (millis() - packet.sampleMs > pickupDetector().settings.max_gap_ms) {
+    invalidateMotionProcessing("Queued motion samples too old for alert processing");
+    return;
+  }
+  lastProcessedMotionMs = millis();
+  // Publish before admitting a frame from the next nominal one-second window.
+  publishMotion(packet.sampleMs);
+  float detectorA[3], detectorW[3];
+  const bool wasCalibrating = motionCalibrating;
+  const bool collectCalibration = motionCalibrating &&
+                                 int32_t(packet.sampleMs - motionCalibrationStartedMs) >= 0;
+  for (unsigned axis = 0; axis < 3; ++axis) {
+    const unsigned offset = axis * 2;
+    const int32_t raw = decodeMotionRaw(packet.raw[offset], packet.raw[offset + 1]);
+    const float value = raw * (9.80665f / 16384.0f); // +/-2 g, includes gravity.
+    if (collectCalibration) {
+      motionCalibrationSum[axis] += value;
+      motionCalibrationSquares[axis] += double(value) * value;
+    }
+    const float corrected =
+        value -
+        motionBias[axis]; // Constant bias subtraction, never normalization/clipping.
+    detectorA[axis] = corrected;
+    const int32_t gyro = decodeMotionRaw(packet.raw[offset + 6], packet.raw[offset + 7]);
+    detectorW[axis] =
+        gyro * (3.14159265358979323846f / (180.0f * 131.0f)); // +/-250 deg/s -> rad/s.
+    if (collectCalibration && motionGyroCalibrating) {
+      gyroCalibrationSum[axis] += detectorW[axis];
+      gyroCalibrationSquares[axis] += double(detectorW[axis]) * detectorW[axis];
+    }
+    detectorW[axis] -= motionGyroBias[axis]; // Persisted zero-rate correction, also
+                                             // used by pickup baseline learning.
+    motionGyroSum[axis] += detectorW[axis];
+    motionSum[axis] += corrected;
+    if (!motionSamples || corrected < motionMin[axis])
+      motionMin[axis] = corrected;
+    if (!motionSamples || corrected > motionMax[axis])
+      motionMax[axis] = corrected;
+  }
+  ++motionSamples;
+  if (collectCalibration && ++motionCalibrationSamples >= 500)
+    finishMotionCalibration();
+  if (!wasCalibrating)
+    processPickupSample(detectorA, detectorW, packet.sampleMs);
+}
+void publishProcessedMotion(uint32_t now) {
+  // Normal reports close on the next frame, never ahead of its estimated time.
+  // Still publish failures if samples stop entirely (or startup failed).
+  if (now - lastProcessedMotionMs > 250 && acquisitionQueueStatus().depth == 0) {
+    invalidateMotionProcessing("No timely motion samples");
+    publishMotion(now);
+  }
+}
+void resetMotionProcessing(uint32_t now) {
+  motionSamples = 0;
+  for (unsigned axis = 0; axis < 3; ++axis)
+    motionSum[axis] = motionGyroSum[axis] = 0;
+  motionLastReport = now;
+  motionWindowFailed = false;
+  invalidatePickup("Acquisition restarted; waiting for fresh baseline");
 }
 
 /* Start five seconds of raw samples on explicit request; a reboot never triggers calibration. */
 bool beginMotionCalibration() {
+  SensorStateLock lock;
   if (!motionReady || motionPaused || motionCalibrating)
     return false;
   motionCalibrationSamples = 0;
+  motionCalibrationStartedMs = millis();
   motionGyroCalibrating = false;
   for (unsigned i = 0; i < 3; ++i)
     motionCalibrationSum[i] = motionCalibrationSquares[i] = 0;
@@ -527,9 +575,11 @@ bool beginMotionCalibration() {
 /* Gyro calibration requires stillness, not a specific orientation, and never changes accelerometer
  * offsets. */
 bool beginGyroCalibration() {
+  SensorStateLock lock;
   if (!motionReady || motionPaused || motionCalibrating)
     return false;
   motionCalibrationSamples = 0;
+  motionCalibrationStartedMs = millis();
   for (unsigned i = 0; i < 3; ++i)
     motionCalibrationSum[i] = motionCalibrationSquares[i] = gyroCalibrationSum[i] =
         gyroCalibrationSquares[i] = 0;
@@ -545,10 +595,12 @@ void disableMotion() {
 }
 
 MotionTemperature motionTemperature() {
+  SensorStateLock lock;
   return {motionTemperatureC, motionTemperatureOk, motionTemperatureMs, motionTemperatureError};
 }
 
 MotionStatus motionStatus() {
+  SensorStateLock lock;
   MotionStatus status{};
   status.ready = motionReady;
   status.gyroCalibrating = motionGyroCalibrating;
@@ -587,7 +639,7 @@ const MotionReport &motionHistoryAt(unsigned index) {
                        MOTION_HISTORY_SIZE];
 }
 
-MotionDiagnostics readMotionDiagnostics() {
+MotionDiagnostics readMotionDiagnosticsOwner() {
   MotionDiagnostics result;
   result.enabled = I2C_SENSORS_ENABLED;
   if (!result.enabled)
@@ -607,5 +659,13 @@ MotionDiagnostics readMotionDiagnostics() {
     uint8_t value;
     result.registers[i] = motionRead(MOTION_DIAGNOSTIC_REGISTERS[i], &value, 1) ? value : -1;
   }
+  return result;
+}
+
+MotionDiagnostics readMotionDiagnostics() {
+  MotionDiagnostics result;
+  runSensorCommand([](void *argument) {
+    *static_cast<MotionDiagnostics *>(argument) = readMotionDiagnosticsOwner();
+  }, &result);
   return result;
 }

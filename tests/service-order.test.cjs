@@ -6,7 +6,8 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '..', 'ESP32_1.ino'), 'utf8');
 const functionBody = name => source.match(new RegExp('void '+name+'\\(\\) \\{([\\s\\S]*?)\\n\\}'))[1]
-  .replace(/const uint32_t /g, 'const ');
+  .replace(/const uint32_t /g, 'const ')
+  .replace(/ScopedServiceTiming \w+\([^;]+;/g, '');
 
 function fixture(enabled) {
   const calls = [];
@@ -17,8 +18,10 @@ function fixture(enabled) {
     'setupEnvironment','setupMotion','disableEnvironment','disableMotion','invalidatePickup',
     'resetEnvironmentWindow','setupNetwork','setupMicrophone','setupHttp','serviceOta',
     'serviceMicrophoneAudio','publishWindow','acquireSensor','acquireMotion','serviceHttp',
-    'logMicrophoneDiagnostics','servicePickup','servicePickupBle','serviceNetwork'];
+    'logMicrophoneDiagnostics','servicePickup','servicePickupBle','serviceNetwork',
+    'processSensorPackets','invalidateMotionProcessing','invalidateEnvironmentProcessing'];
   for (const name of services) context[name] = (...args) => calls.push(name);
+  context.startAcquisition=()=>{calls.push('startAcquisition');return true;};
   vm.createContext(context);
   return {calls, run(name) { vm.runInContext(functionBody(name), context); }};
 }
@@ -27,15 +30,15 @@ let f = fixture(true);
 f.run('setup');
 assert.deepEqual(f.calls, ['setupEnvironmentHistory','setupPickup','setupPickupEvents','setupOta',
   'Wire.begin','Wire.setClock','Wire.setTimeOut','setupEnvironment','setupMotion','Wire.setClock',
-  'resetEnvironmentWindow','setupNetwork','setupMicrophone','setupHttp','resetEnvironmentWindow']);
+  'resetEnvironmentWindow','setupNetwork','setupMicrophone','setupHttp','startAcquisition']);
 f = fixture(false);
 f.run('setup');
 assert.deepEqual(f.calls, ['setupEnvironmentHistory','setupPickup','setupPickupEvents','setupOta',
   'disableEnvironment','disableMotion','invalidatePickup','resetEnvironmentWindow',
-  'setupNetwork','setupMicrophone','setupHttp','resetEnvironmentWindow']);
+  'setupNetwork','setupMicrophone','setupHttp','startAcquisition']);
 f.calls.length = 0;
 f.run('loop');
-assert.deepEqual(f.calls, ['serviceOta','serviceMicrophoneAudio','publishWindow','acquireSensor',
-  'acquireMotion','serviceHttp','serviceMicrophoneAudio','logMicrophoneDiagnostics','acquireMotion',
+assert.deepEqual(f.calls, ['serviceOta','serviceMicrophoneAudio','processSensorPackets',
+  'serviceHttp','serviceMicrophoneAudio','logMicrophoneDiagnostics','processSensorPackets',
   'servicePickup','servicePickupBle','serviceNetwork']);
 console.log('PASS: combined/microphone startup, Wi-Fi allocation priority, DMA drains and report/service order');

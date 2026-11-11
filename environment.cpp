@@ -7,6 +7,8 @@
 #include "config.h"
 #include "motion.h"
 #include "self_tests.h"
+#include "acquisition_timing.h"
+#include "i2c_bus_service.h"
 
 namespace {
 
@@ -14,8 +16,9 @@ Adafruit_BME280 bme;
 uint8_t sensorAddress = 0;
 bool sensorReady = false, converting = false;
 uint32_t lastStart = 0, conversionStart = 0, windowStart = 0;
+uint32_t acquisitionWindowStart = 0, environmentSequence = 0;
+bool firstTrigger = true;
 uint32_t missedSampleDeadlines = 0, lateConversionServices = 0, missedReportDeadlines = 0;
-unsigned windowScheduledSlots = 0;
 constexpr unsigned SAMPLES_PER_WINDOW = 5;
 static_assert(SAMPLE_INTERVAL_MS == 200, "5 Hz requires SAMPLE_INTERVAL_MS = 200");
 SampleWindow window;
@@ -62,59 +65,32 @@ bool writeRegister(uint8_t reg, uint8_t value) {
  * Publishing a partial average would conceal missing or unreliable samples.
  */
 void failSample(const char *message) {
-  sensorError = message;
-  windowFailed = true;
   converting = false;
-  // Publish the error with the one-second report, not at raw acquisition rate.
+  SensorPacket packet;
+  packet.kind = SensorPacketKind::EnvironmentFault;
+  packet.error = message;
+  packet.sampleMs = conversionStart;
+  enqueueSensorPacket(packet);
 }
 } // namespace
 
 /*
- * Advance a forced-conversion state machine at five readings per second.
- * Returning between trigger and read keeps the dashboard and OTA responsive.
- * Only validated measurements enter the average; the LED belongs to pickup detection.
+ * Read the completed forced conversion once, then queue validated values for loop processing.
  */
-void acquireSensor() {
-  if (!sensorReady)
-    return; // Initialization errors require a reset after repair.
-  const uint32_t now = millis();
-  if (!converting && now - lastStart >= SAMPLE_INTERVAL_MS) {
-    // Keep the original 200 ms grid. Skip elapsed slots instead of taking a
-    // burst of replacement readings that would misrepresent the time average.
-    const uint32_t slots = (now - lastStart) / SAMPLE_INTERVAL_MS;
-    missedSampleDeadlines += slots - 1;
-    windowScheduledSlots += slots;
-    if (slots > 1) {
-      windowFailed = true;
-      sensorError = "Missed sampling deadline";
-    }
-    lastStart += slots * SAMPLE_INTERVAL_MS;
-    // ctrl_meas: temperature x1, pressure x1, forced mode. Humidity x1
-    // was configured by setSampling(). Do not call takeForcedMeasurement():
-    // that library method waits for the sensor conversion to complete.
-    if (!writeRegister(0xF4, 0x25)) {
-      failSample("I2C trigger failed");
-      return;
-    }
-    conversionStart = now;
-    converting = true;
-  }
-  // Leave time for x1 temperature, pressure and humidity conversion, without sleeping.
-  if (!converting || now - conversionStart < 15)
-    return;
+// Read once per 200 ms deadline, before starting another forced conversion.
+// Results are attributed to their trigger slot, never their retrieval time.
+void readPreviousEnvironment(uint32_t now) {
+  if (!converting) return;
   uint8_t status;
   if (!readRegisters(0xF3, &status, 1)) {
     failSample("I2C status read failed");
     return;
   }
-  // A late loop visit does not mean the sensor timed out: first check whether
-  // conversion actually finished. Only a still-busy sensor can time out.
   if (status & 0x09) {
-    if (now - conversionStart > 80)
-      failSample("Conversion timeout (sensor still busy)");
+    failSample("Conversion still busy at next 200 ms deadline");
     return;
   }
-  if (now - conversionStart > 80)
+  if (now - conversionStart > SAMPLE_INTERVAL_MS + 50)
     ++lateConversionServices;
   uint8_t raw[8];
   // Check the complete raw frame before asking the library for compensated values.
@@ -141,8 +117,76 @@ void acquireSensor() {
     return;
   }
   converting = false;
-  // Accumulate full-precision readings; rounding happens only when reporting.
-  window.add(temperatureC, humidityPct, pressureHpa);
+  SensorPacket packet;
+  packet.kind = SensorPacketKind::Environment;
+  packet.sampleMs = conversionStart;
+  packet.retrievedMs = now;
+  packet.sequence = ++environmentSequence;
+  packet.temperature = temperatureC;
+  packet.humidity = humidityPct;
+  packet.pressure = pressureHpa;
+  enqueueSensorPacket(packet);
+  countEnvironmentSample();
+}
+
+void acquireSensor() {
+  ScopedServiceTiming timing(acquisitionTiming().environment);
+  const uint32_t now = millis();
+  if (!firstTrigger && now - lastStart < SAMPLE_INTERVAL_MS) return;
+  const uint32_t elapsedSlots = (now - lastStart) / SAMPLE_INTERVAL_MS;
+  const uint32_t slots = firstTrigger ? elapsedSlots + 1 : elapsedSlots;
+  if (!firstTrigger && sensorReady) readPreviousEnvironment(now);
+  if (slots > 1) {
+    missedSampleDeadlines += slots - 1;
+    failSample("Missed sampling deadline");
+  }
+  lastStart += (firstTrigger ? slots - 1 : slots) * SAMPLE_INTERVAL_MS;
+  firstTrigger = false;
+  if (lastStart - acquisitionWindowStart >= PUBLISH_INTERVAL_MS) {
+    const uint32_t windows = (lastStart - acquisitionWindowStart) / PUBLISH_INTERVAL_MS;
+    acquisitionWindowStart += windows * PUBLISH_INTERVAL_MS;
+    acquireMotionTemperature(now);
+    SensorPacket boundary;
+    boundary.kind = SensorPacketKind::Boundary;
+    boundary.sampleMs = acquisitionWindowStart;
+    const MotionTemperature chip = motionTemperature();
+    boundary.temperature = chip.celsius;
+    boundary.chipTemperatureOk = chip.ok;
+    enqueueSensorPacket(boundary);
+  }
+  if (!sensorReady) return; // Still deliver failed report boundaries for a missing BME.
+  conversionStart = millis();
+  if (!writeRegister(0xF4, 0x25)) {
+    failSample("I2C trigger failed");
+    return;
+  }
+  converting = true;
+}
+
+void invalidateEnvironmentProcessing(const char *message) {
+  windowFailed = true;
+  sensorError = message;
+}
+
+void processEnvironmentPacket(const SensorPacket &packet) {
+  if (packet.kind == SensorPacketKind::Reset) {
+    window = SampleWindow{};
+    windowStart = packet.sampleMs;
+    windowFailed = false;
+    sensorError = "Waiting for fresh samples after acquisition restart";
+  } else if (packet.kind == SensorPacketKind::EnvironmentFault) {
+    invalidateEnvironmentProcessing(packet.error);
+  } else if (packet.kind == SensorPacketKind::Environment) {
+    if (packet.sampleMs - windowStart >= PUBLISH_INTERVAL_MS) {
+      invalidateEnvironmentProcessing("Missing environmental window boundary");
+      publishWindow(packet.sampleMs);
+    }
+    window.add(packet.temperature, packet.humidity, packet.pressure);
+  } else if (packet.kind == SensorPacketKind::Boundary) {
+    latest.mpuTemperatureC = packet.temperature;
+    latest.mpuTemperatureOk = packet.chipTemperatureOk;
+    publishWindow(packet.sampleMs);
+  }
 }
 
 /*
@@ -156,19 +200,15 @@ void publishWindow(uint32_t now) {
   if (now - windowStart < PUBLISH_INTERVAL_MS)
     return;
   const uint32_t elapsedWindows = (now - windowStart) / PUBLISH_INTERVAL_MS;
-  // Slots never reached before the boundary are lost, not filled in later.
-  if (windowScheduledSlots < SAMPLES_PER_WINDOW)
-    missedSampleDeadlines += SAMPLES_PER_WINDOW - windowScheduledSlots;
-  missedSampleDeadlines += (elapsedWindows - 1) * SAMPLES_PER_WINDOW;
+  missedReportDeadlines += elapsedWindows - 1;
   const uint32_t sequence = latest.sequence + 1;
+  const float chipC = latest.mpuTemperatureC;
+  const bool chipOk = latest.mpuTemperatureOk;
   latest = PublishedSample{};
   latest.sequence = sequence;
   latest.sampleMs = now;
-  // Synchronize the 1 Hz chip-temperature sample independently of BME validity.
-  acquireMotionTemperature(now);
-  const MotionTemperature temperature = motionTemperature();
-  latest.mpuTemperatureC = temperature.celsius;
-  latest.mpuTemperatureOk = temperature.ok;
+  latest.mpuTemperatureC = chipC;
+  latest.mpuTemperatureOk = chipOk;
   latest.count = window.count;
   // Reject missing readings, any recorded error, and excessively delayed windows.
   latest.ok = sensorReady && !windowFailed && window.count == SAMPLES_PER_WINDOW &&
@@ -203,13 +243,9 @@ void publishWindow(uint32_t now) {
   // Start a non-overlapping window; measurements must not be counted twice.
   window = SampleWindow{};
   windowFailed = false;
-  converting = false; // Do not carry a late conversion into the next window.
   // Advance on the original one-second grid, without manufacturing reports
   // for windows during which acquisition could not run.
-  missedReportDeadlines += elapsedWindows - 1;
   windowStart += elapsedWindows * PUBLISH_INTERVAL_MS;
-  windowScheduledSlots = 0;
-  lastStart = windowStart - SAMPLE_INTERVAL_MS; // First slot stays on the fixed grid.
 }
 
 void setupEnvironment() {
@@ -247,14 +283,18 @@ void disableEnvironment() {
   latest.error = sensorError;
 }
 void resetEnvironmentWindow(uint32_t now) {
-  windowStart = now;
-  lastStart = windowStart - SAMPLE_INTERVAL_MS;
+  windowStart = acquisitionWindowStart = lastStart = now;
+  converting = false;
+  firstTrigger = true;
 }
 void discardEnvironmentWindow() {
-  window = SampleWindow{};
-  windowScheduledSlots = 0;
-  failSample("OTA interrupted acquisition; window discarded");
-  resetEnvironmentWindow(millis());
+  acquisitionWindowStart = lastStart = millis();
+  converting = false;
+  firstTrigger = true;
+  SensorPacket packet;
+  packet.kind = SensorPacketKind::Reset;
+  packet.sampleMs = acquisitionWindowStart;
+  enqueueSensorPacket(packet);
 }
 const PublishedSample &latestEnvironmentSample() {
   return latest;
@@ -263,6 +303,7 @@ const EnvironmentHistory &environmentHistory() {
   return history;
 }
 EnvironmentStatus environmentStatus() {
+  SensorStateLock lock;
   return {missedSampleDeadlines, lateConversionServices, missedReportDeadlines,
           environmentHistoryTestsPassed};
 }

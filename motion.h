@@ -1,7 +1,12 @@
 #pragma once
 #include <stdint.h>
+struct SensorPacket;
+void processMotionPacket(const SensorPacket &packet);
+void invalidateMotionProcessing(const char *message);
+void publishProcessedMotion(uint32_t now);
+void resetMotionProcessing(uint32_t now);
 
-// All motion access is on setup()/loop(), except the private data-ready ISR.
+// Hardware calls belong to setup/acquisition; processing and calibration belong to loop.
 // Acceleration includes gravity (m/s^2); gyro vectors use rad/s.
 constexpr uint32_t MOTION_REPORT_MS = 1000;
 constexpr unsigned MOTION_HISTORY_SIZE = 128;
@@ -46,10 +51,10 @@ struct MotionDiagnostics {
 
 void setupMotion();   // Shared Wire bus must already be initialized.
 void disableMotion(); // Status only: does not touch I2C or the interrupt pin.
-void acquireMotion(); // Bounded FIFO drain; forwards each raw frame to pickup.
-void acquireMotionTemperature(uint32_t now);
-void pauseMotion();
-void resumeMotion();
+void acquireMotion(); // Owner: bounded FIFO drain into the software queue.
+void acquireMotionTemperature(uint32_t now); // Owner only.
+void pauseMotion();  // Owner only; use pauseAcquisition() from loop.
+void resumeMotion(); // Owner only; use resumeAcquisition() from loop.
 
 // False means unavailable/paused/already calibrating. Completion is asynchronous.
 bool beginMotionCalibration();
@@ -60,4 +65,4 @@ MotionStatus motionStatus();
 const MotionReport &latestMotionReport();
 unsigned motionHistorySize();
 const MotionReport &motionHistoryAt(unsigned index); // Oldest first; index < size.
-MotionDiagnostics readMotionDiagnostics();           // Synchronous, checked I2C reads.
+MotionDiagnostics readMotionDiagnostics(); // Checked I2C request executed by owner.

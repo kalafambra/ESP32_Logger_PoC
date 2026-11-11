@@ -1,0 +1,10 @@
+{
+  "additionalFiles": "",
+  "builtInLibrariesFolders": "C:\\Users\\przemek\\AppData\\Local\\Arduino15\\libraries",
+  "compiler.optimization_flags": "-Os",
+  "customBuildProperties": "",
+  "fqbn": "esp32:esp32:esp32:PartitionScheme=default",
+  "hardwareFolders": "C:\\Users\\przemek\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.12,C:\\Users\\przemek\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.12",
+  "otherLibrariesFolders": "c:\\Users\\przemek\\Documents\\Arduino\\libraries",
+  "sketchLocation": "D:\\code\\ESP32_1\\diagnostics\\i2c_sweep"
+}

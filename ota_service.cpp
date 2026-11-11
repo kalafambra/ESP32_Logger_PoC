@@ -5,6 +5,7 @@
 #include "config.h"
 #include "environment.h"
 #include "motion.h"
+#include "i2c_bus_service.h"
 #include "microphone.h"
 #include "microphone_spectrum.h"
 
@@ -19,7 +20,7 @@ void setupOta() {
     ArduinoOTA.setPassword(OTA_PASSWORD);
     /* Pause sensor acquisition; the pickup LED's timer remains independent. */
     ArduinoOTA.onStart([]() {
-      pauseMotion(); // Stop the FIFO while OTA temporarily owns loop execution.
+      pauseAcquisition(); // Owner acknowledges that all sensor I2C is stopped.
       pauseMicrophone();
       resetSpectrumWindow();
       Serial.println("[ota] Update starting; measurement and dashboard handling paused");
@@ -38,7 +39,7 @@ void setupOta() {
         []() { Serial.println("[ota] Transfer complete; rebooting into new firmware"); });
     /* Diagnose upload failures and discard samples spanning an interrupted update. */
     ArduinoOTA.onError([](ota_error_t error) {
-      resumeMotion(); // Reset FIFO framing before collecting post-update samples.
+      resumeAcquisition(); // Owner resets FIFO framing and the BME schedule.
       resumeMicrophone();
       resetSpectrumWindow();
       const char *reason = error == OTA_AUTH_ERROR      ? "authentication failed"
@@ -48,7 +49,6 @@ void setupOta() {
                            : error == OTA_END_ERROR     ? "final verification failed"
                                                         : "unknown error";
       Serial.printf("[ota] Error %u: %s\n", unsigned(error), reason);
-      discardEnvironmentWindow();
     });
     otaConfigured = true;
   } else {
