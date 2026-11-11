@@ -19,7 +19,8 @@ function fixture(enabled) {
     'resetEnvironmentWindow','setupNetwork','setupMicrophone','setupHttp','serviceOta',
     'serviceMicrophoneAudio','publishWindow','acquireSensor','acquireMotion','serviceHttp',
     'logMicrophoneDiagnostics','servicePickup','servicePickupBle','serviceNetwork',
-    'processSensorPackets','invalidateMotionProcessing','invalidateEnvironmentProcessing'];
+    'processSensorPackets','invalidateMotionProcessing','invalidateEnvironmentProcessing',
+    'serviceProcessingFallback'];
   for (const name of services) context[name] = (...args) => calls.push(name);
   context.startAcquisition=()=>{calls.push('startAcquisition');return true;};
   vm.createContext(context);
@@ -38,7 +39,7 @@ assert.deepEqual(f.calls, ['setupEnvironmentHistory','setupPickup','setupPickupE
   'setupNetwork','setupMicrophone','setupHttp','startAcquisition']);
 f.calls.length = 0;
 f.run('loop');
-assert.deepEqual(f.calls, ['serviceOta','serviceMicrophoneAudio','processSensorPackets',
-  'serviceHttp','serviceMicrophoneAudio','logMicrophoneDiagnostics','processSensorPackets',
-  'servicePickup','servicePickupBle','serviceNetwork']);
+assert.deepEqual(f.calls, ['serviceOta','serviceMicrophoneAudio',
+  'serviceHttp','serviceMicrophoneAudio','logMicrophoneDiagnostics',
+  'serviceProcessingFallback','servicePickupBle','serviceNetwork']);
 console.log('PASS: combined/microphone startup, Wi-Fi allocation priority, DMA drains and report/service order');

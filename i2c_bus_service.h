@@ -3,7 +3,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
-// The acquisition task owns Wire after setup. Processing stays on loop for step 6.
+// Acquisition owns Wire; the processing worker owns algorithms and published state.
 enum class SensorPacketKind : uint8_t { Motion, MotionFault, Environment, EnvironmentFault,
                                        Boundary, Reset };
 struct SensorPacket {
@@ -17,12 +17,16 @@ struct SensorPacket {
 struct AcquisitionQueueStatus {
   uint32_t dropped = 0, highWater = 0, depth = 0, stackFreeBytes = 0;
   bool running = false;
+  uint32_t processingStackFreeBytes = 0;
+  bool processingRunning = false;
 };
 bool startAcquisition();
 void notifyAcquisitionFromISR();
 bool enqueueSensorPacket(SensorPacket packet); // Acquisition producer; zero wait.
-void processSensorPackets();                  // Sole consumer: loop().
+void processSensorPackets();                  // Sole consumer: processing task.
+void serviceProcessingFallback(uint32_t now);  // Journal/LED maintenance if no worker exists.
 void runSensorCommand(void (*command)(void *), void *argument);
+void runProcessingCommand(void (*command)(void *), void *argument);
 void pauseAcquisition();
 void resumeAcquisition();
 AcquisitionQueueStatus acquisitionQueueStatus();
@@ -32,4 +36,13 @@ class SensorStateLock {
 public:
   SensorStateLock();
   ~SensorStateLock();
+};
+// Lock order: processing state, then acquisition state. Never wait for owner RPC
+// or send HTTP while holding either state lock.
+class ProcessingStateLock {
+public:
+  ProcessingStateLock();
+  ~ProcessingStateLock();
+  ProcessingStateLock(const ProcessingStateLock &) = delete;
+  ProcessingStateLock &operator=(const ProcessingStateLock &) = delete;
 };

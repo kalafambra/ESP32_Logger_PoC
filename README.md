@@ -605,7 +605,7 @@ after triggering). A conversion fault means the sensor was still busy at the nex
 200 ms service deadline; there is no repeated readiness polling. Motion history includes
 `sample_count` and `error` for every row, allowing sample accounting after backfill.
 
-## Acquisition and processing (blocks 2–6)
+## Acquisition and processing (blocks 2–7)
 
 After startup, the `sensor-acquire` FreeRTOS task exclusively owns sensor I2C.
 MPU6050 GPIO17 interrupts only set a pending flag and notify this task; they never
@@ -622,24 +622,33 @@ actual trigger times; MPU times are nominal 10 ms cadence estimates anchored to 
 retrieval, not hardware timestamps. Independent MPU clock drift is not corrected.
 
 A static 128-packet queue carries raw motion frames, validated BME values, faults and
-window boundaries to the sole consumer on `loop()`. Queue sends never wait. Overflow
+window boundaries to the sole consumer, the `sensor-process` task. Queue sends never wait. Overflow
 increments a loss generation so downstream state is invalidated before accepting
 post-loss data. Motion samples older than the configured maximum gap are rejected
 rather than generating delayed historical alerts. Queued samples from before a
 calibration command do not count toward that calibration.
 
 Aggregation, calibration, pickup detection/settings, event-journal writes and plot
-history remain loop-owned in this checkpoint. HTTP reads stable loop-owned reports
-and copies acquisition-owned status under its mutex, then formats/sends unlocked.
-Consequently HTTP cannot delay sensor reads through loop scheduling, but can still
-delay downstream processing; moving processing to its own task is block 7. The
-software queue and existing MPU hardware FIFO absorb bounded delays, not unlimited
-browser/network stalls. Dashboard hosting and history delivery are unchanged.
+history are owned by the processing task. Every accepted queue packet notifies it;
+a 20 ms idle timeout also services detector gaps, the LED state and journal writes.
+Calibration, settings and debug subscription requests are acknowledged processing-owner
+commands. HTTP copies bounded reports/history/status under a recursive processing
+mutex and serializes/sends after releasing it. The environment history snapshot and
+up-to-24-row debug snapshot use temporary checked heap allocations; motion snapshots
+contain at most 20 reports. Allocation failure returns HTTP 503 without modifying
+live state. Debug timestamps stay monotonic when a FIFO estimate precedes a newer
+service timestamp. Both sensor acquisition and processing continue during slow HTTP
+transfers; CPU, allocator and flash/NVS contention still exist. Dashboard hosting and
+history delivery are unchanged.
 
-OTA start waits for the owner to stop the FIFO and clears queued samples. Failed OTA
-resets FIFO/BME scheduling and queues a fresh window boundary; the LED timer remains
-independent. The acquisition task uses priority 2 and a 4096-byte stack and is not
-pinned to a core. Task allocation failure is reported and acquisition stays stopped.
+OTA start stops the acquisition owner, clears queued samples, then waits for processing
+to pause and cancel calibration. Failed OTA resets FIFO/BME scheduling, queues a fresh
+window boundary, and resumes processing. The LED timer remains independent. Acquisition
+uses priority 2 and a 4096-byte stack; processing uses priority 1 and a 6144-byte stack.
+Both tasks are unpinned. Worker creation failure prevents acquisition from starting.
+When no processing worker exists (including disabled I2C builds), the main loop still
+maintains journal/LED state. Processing-state locks precede acquisition-state locks;
+neither is held while waiting for an owner command or sending an HTTP response.
 
 ### Acquisition timing diagnostics
 
@@ -649,14 +658,14 @@ counts validated BME readings; `motion_frames` counts decoded MPU FIFO frames.
 Compare counter differences against `uptime_ms` differences over at least 10 seconds
 to estimate achieved rates (normally 5 and 100 samples/s after startup).
 
-The `loop`, `environment`, `motion` and `http` objects report call counts,
+The `loop`, `environment`, `motion`, `processing` and `http` objects report call counts,
 last/maximum/mean elapsed duration in microseconds and maximum start-to-start gap.
 Durations include blocking and preemption, not CPU utilization. Environment timing
 covers acquisition-owner BME calls; motion timing excludes disabled/OTA-paused
 calls. Most BME calls do no I2C work, so mean duration is not conversion latency.
 Motion service runs on owner wakeups, including fallback/empty checks. Loop duration
-includes downstream processing and HTTP, not independent acquisition. BME timing
-includes its periodic MPU chip-temperature read; report publication is on loop.
+includes HTTP and network/audio services, not independent acquisition or processing.
+BME timing includes its periodic MPU chip-temperature read; reports are published by processing.
 HTTP timing includes idle checks and response transmission.
 The current timing response excludes its own unfinished HTTP/loop duration.
 Maxima include startup settling, OTA and other stalls; they do not reset on reads.
@@ -664,7 +673,9 @@ Unsigned microsecond differences support normal timer wraparound, but gaps of
 71 minutes or longer cannot be measured reliably. Timing updates/copies use brief
 spinlocks; no sensor I2C is performed under these spinlocks or inside an ISR.
 The response also exposes `acquisition_running`, `queue_capacity`, `queue_depth`,
-`queue_high_water`, `queue_dropped` and `acquisition_stack_free_bytes`.
+`queue_high_water`, `queue_dropped`, `acquisition_stack_free_bytes`, `processing_running`
+and `processing_stack_free_bytes`, plus free/minimum heap and largest free-block sizes.
+Task stack allocations are runtime heap costs, additional to reported static RAM use.
 
 For baseline verification, compare `/api/timing`, `/api/readings` and `/api/motion`
 before/after normal dashboard and `/pickup` use. Check rates, existing deadline/error
@@ -672,11 +683,12 @@ counters and FIFO overflows together. A timing peak alone does not establish dat
 
 Hardware verification after installing the default build:
 
-1. Confirm `acquisition_running:true`, advancing sample counters (approximately 5/100
+1. Confirm `acquisition_running:true` and `processing_running:true`, advancing sample counters (approximately 5/100
    per second), five-sample BME reports and healthy motion reports after startup.
 2. Exercise the main dashboard, `/pickup` and `/api/motion/diagnostics`; watch queue
    drops, FIFO overflows, I2C errors and stack headroom. Sampling counters should keep
-   advancing during HTTP work, even if processing briefly lags.
+   advancing during HTTP work, with processing and report sequences advancing independently
+   of browser transfer completion. Check both stack margins and heap under tuning-page load.
 3. Exercise both calibration commands while stationary and confirm completion and
    retained bias after reboot. Move the board and verify pickup/LED behavior.
 4. Verify a normal OTA update and, when convenient, recovery from an interrupted

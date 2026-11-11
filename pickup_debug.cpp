@@ -1,4 +1,6 @@
 #include "pickup_debug.h"
+#include "i2c_bus_service.h"
+#include <memory>
 #include <math.h>
 #include <new>
 
@@ -22,7 +24,7 @@ bool PickupDebug::capture(const PickupDetector &p, bool valid, uint32_t now, uin
                           uint32_t age, bool led, uint32_t revision) {
   if (!subscribed)
     return false;
-  if (now - lastRequest > 3000) {
+  if (int32_t(now - lastRequest) > 3000) {
     delete[] records;
     records = nullptr;
     head = count = 0;
@@ -31,6 +33,8 @@ bool PickupDebug::capture(const PickupDetector &p, bool valid, uint32_t now, uin
     observedPeriod = observedDuty = NAN;
     return false;
   }
+  // Estimated FIFO times may precede a newer service/subscribe timestamp slightly.
+  if (count && int32_t(now - lastCapture) < 0) return false;
   if (!p.active) {
     lastRise = lastOnMs = 0;
     observedPeriod = observedDuty = NAN;
@@ -117,7 +121,25 @@ bool PickupDebug::capture(const PickupDetector &p, bool valid, uint32_t now, uin
   return true;
 }
 
-void PickupDebug::appendJson(String &json, uint32_t since) const {
+uint32_t PickupDebug::latestSequence() const {
+  ProcessingStateLock lock;
+  return sequence;
+}
+
+bool PickupDebug::appendJson(String &json, uint32_t since) const {
+  struct Snapshot { uint32_t latest = 0, oldest = 0; unsigned count = 0; Record rows[24]; };
+  std::unique_ptr<Snapshot> snapshot(new (std::nothrow) Snapshot);
+  if (!snapshot) return false;
+  {
+    ProcessingStateLock lock;
+    snapshot->latest = sequence;
+    snapshot->oldest = count ? records[(head + CAPACITY - count) % CAPACITY].sequence : 0;
+    if (since > sequence) since = 0;
+    for (unsigned i = 0; i < count && snapshot->count < 24; ++i) {
+      const Record &record = records[(head + CAPACITY - count + i) % CAPACITY];
+      if (record.sequence > since) snapshot->rows[snapshot->count++] = record;
+    }
+  }
   static const char *names[] = {"valid",
                                 "active",
                                 "armed",
@@ -154,9 +176,8 @@ void PickupDebug::appendJson(String &json, uint32_t since) const {
                                 "observed_led_duty_pct",
                                 "settings_revision"};
   static_assert(sizeof(names) / sizeof(names[0]) + 4 == COUNT, "Debug schema must match rows");
-  const uint32_t oldest = count ? records[(head + CAPACITY - count) % CAPACITY].sequence : 0;
-  json += ",\"capture_ms\":50,\"latest_sequence\":" + String(sequence) +
-          ",\"oldest_sequence\":" + String(oldest);
+  json += ",\"capture_ms\":50,\"latest_sequence\":" + String(snapshot->latest) +
+          ",\"oldest_sequence\":" + String(snapshot->oldest);
   json += ",\"columns\":[\"sequence\",\"uptime_ms\"";
   for (const char *name : names) {
     json += ",\"";
@@ -166,10 +187,8 @@ void PickupDebug::appendJson(String &json, uint32_t since) const {
   json +=
       ",\"trigger_mask\",\"confirmed_trigger_mask\",\"quiet_block_mask\",\"events\"],\"rows\":[";
   unsigned sent = 0;
-  for (unsigned i = 0; i < count && sent < 24; ++i) {
-    const auto &r = records[(head + CAPACITY - count + i) % CAPACITY];
-    if (r.sequence <= since)
-      continue;
+  for (unsigned i = 0; i < snapshot->count; ++i) {
+    const auto &r = snapshot->rows[i];
     if (sent++)
       json += ',';
     json += '[';
@@ -181,4 +200,5 @@ void PickupDebug::appendJson(String &json, uint32_t since) const {
     json += ']';
   }
   json += ']';
+  return true;
 }

@@ -65,7 +65,7 @@ private:
   void flush();
 };
 
-// Snapshot methods are safe from the BLE task; mutation/NVS service belongs to loop().
+// Snapshot methods are safe from HTTP/BLE; mutation/NVS service belongs to processing.
 PickupEventLog &pickupEventLog();
 
 void setupPickupEvents(); // Self-test and restore journal before acquisition.

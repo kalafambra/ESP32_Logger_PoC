@@ -3,6 +3,8 @@
 #include <WebServer.h>
 #include <WiFi.h>
 #include <math.h>
+#include <memory>
+#include <new>
 #include "config.h"
 #include "environment.h"
 #include "motion.h"
@@ -22,7 +24,7 @@ WebServer server(80);
 bool httpStarted = false;
 static_assert(DEFAULT_ALTITUDE_M >= -500 && DEFAULT_ALTITUDE_M <= 9000,
               "Set DEFAULT_ALTITUDE_M between -500 and 9000 meters");
-void appendMotion(String &json, uint32_t now);
+void appendMotion(String &json, uint32_t now, const MotionDashboardSnapshot *provided = nullptr);
 void appendPickup(String &json);
 /*
  * Keep history values in the documented [mean, minimum, maximum] order.
@@ -43,10 +45,15 @@ void appendChannel(String &json, const PublishedChannel &channel, bool ok) {
  * consistently to both current readings and historical extrema.
  */
 void sendReadings() {
-  // Reports/history are loop-owned until processing moves to its own task (step 7).
-  const PublishedSample latest = latestEnvironmentSample();
-  const EnvironmentHistory &history = environmentHistory();
-  const EnvironmentStatus status = environmentStatus();
+  std::unique_ptr<EnvironmentDashboardSnapshot> snapshot(new (std::nothrow) EnvironmentDashboardSnapshot);
+  if (!snapshot) {
+    server.send(503, "application/json", "{\"error\":\"Not enough memory for history snapshot\"}");
+    return;
+  }
+  copyEnvironmentDashboard(*snapshot);
+  const PublishedSample &latest = snapshot->latest;
+  const EnvironmentHistory &history = snapshot->history;
+  const EnvironmentStatus &status = snapshot->status;
   const uint32_t now = millis();
   const uint32_t age = now - latest.sampleMs;
   // Allow a full reporting interval plus scheduling margin before marking stale.
@@ -130,9 +137,15 @@ void motionArray(String &json, const float *values, bool valid) {
 
 /* Expose measured sample counts and IRQ/overflow diagnostics rather than claiming the target rate
  * was achieved. */
-void appendMotion(String &json, uint32_t now) {
-  const MotionReport motionLatest = latestMotionReport();
-  const MotionStatus status = motionStatus();
+void appendMotion(String &json, uint32_t now, const MotionDashboardSnapshot *provided) {
+  MotionDashboardSnapshot local;
+  if (!provided) {
+    copyMotionDashboard(local, 0, false);
+    provided = &local;
+    now = millis();
+  }
+  const MotionReport &motionLatest = provided->latest;
+  const MotionStatus &status = provided->status;
   const uint32_t interrupts = status.interrupts;
   const bool valid = motionLatest.sequence && motionLatest.ok &&
                      now - motionLatest.sampleMs <= MOTION_REPORT_MS + 1500;
@@ -203,22 +216,19 @@ void appendMotion(String &json, uint32_t now) {
 /* Serve small incremental batches separately from the large, slow environmental-history endpoint.
  */
 void sendMotionReadings() {
-  const MotionReport motionLatest = latestMotionReport();
-  const uint32_t now = millis();
   uint32_t since = server.hasArg("since") ? strtoul(server.arg("since").c_str(), nullptr, 10) : 0;
-  if (since > motionLatest.sequence)
-    since = 0;
+  MotionDashboardSnapshot snapshot;
+  copyMotionDashboard(snapshot, since, true);
+  const uint32_t now = millis();
   String json;
   json.reserve(5000);
   json = "{\"uptime_ms\":" + String(now);
-  appendMotion(json, now);
+  appendMotion(json, now, &snapshot);
   appendPickup(json);
   json += ",\"history\":[";
   unsigned sent = 0;
-  for (unsigned i = 0; i < motionHistorySize() && sent < 20; ++i) {
-    const MotionReport &report = motionHistoryAt(i);
-    if (report.sequence <= since)
-      continue;
+  for (unsigned i = 0; i < snapshot.count; ++i) {
+    const MotionReport &report = snapshot.reports[i];
     if (sent++)
       json += ',';
     json += "{\"sequence\":" + String(report.sequence) +
@@ -375,7 +385,10 @@ void sendPickupDebug() {
   json += ",\"free_heap\":" + String(ESP.getFreeHeap()) +
           ",\"largest_free_block\":" + String(ESP.getMaxAllocHeap());
   appendPickup(json);
-  pickupDebugHistory().appendJson(json, since);
+  if (!pickupDebugHistory().appendJson(json, since)) {
+    server.send(503, "application/json", "{\"error\":\"Not enough memory for debug snapshot\"}");
+    return;
+  }
   json += '}';
   server.sendHeader("Cache-Control", "no-store");
   server.send(200, "application/json", json);
@@ -384,8 +397,8 @@ void sendPickupDebug() {
 /* Serialize status separately from graphs so faults cannot be mistaken for a quiet, safe detector.
  */
 void appendPickup(String &json) {
-  const PickupStatus status = pickupStatus();
-  const PickupDetector &pickup = pickupDetector();
+  const PickupView pickup = pickupView();
+  const PickupStatus &status = pickup.status;
   json += ",\"pickup\":{\"active\":";
   json += pickup.active ? "true" : "false";
   json += ",\"state\":\"";
@@ -424,8 +437,8 @@ void sendPickupStatus() {
 
 /* Include validation metadata so the dashboard uses the same limits and units as the firmware. */
 void sendPickupSettings() {
-  const PickupStatus status = pickupStatus();
-  const PickupDetector &pickup = pickupDetector();
+  const PickupView pickup = pickupView();
+  const PickupStatus &status = pickup.status;
   const auto &pickupFields = pickupSettingFields();
   String json = "{\"persisted\":";
   json += status.persisted ? "true" : "false";
@@ -486,7 +499,6 @@ void updatePickupSettings() {
     server.send(500, "application/json", "{\"error\":\"Could not save settings\"}");
     return;
   }
-  servicePickup(millis());
   sendPickupSettings();
 }
 
@@ -496,7 +508,6 @@ void restorePickupDefaults() {
     server.send(500, "application/json", "{\"error\":\"Could not save defaults\"}");
     return;
   }
-  servicePickup(millis());
   sendPickupSettings();
 }
 
@@ -532,7 +543,12 @@ void setupHttp() {
     String json;
     json.reserve(1100);
     json = "{\"uptime_ms\":" + String(millis()) +
+           ",\"free_heap_bytes\":" + String(ESP.getFreeHeap()) +
+           ",\"minimum_free_heap_bytes\":" + String(ESP.getMinFreeHeap()) +
+           ",\"largest_free_block_bytes\":" + String(ESP.getMaxAllocHeap()) +
            ",\"acquisition_running\":" + String(queue.running ? "true" : "false") +
+           ",\"processing_running\":" + String(queue.processingRunning ? "true" : "false") +
+           ",\"processing_stack_free_bytes\":" + String(queue.processingStackFreeBytes) +
            ",\"queue_depth\":" + String(queue.depth) +
            ",\"queue_capacity\":128" +
            ",\"queue_high_water\":" + String(queue.highWater) +
@@ -552,6 +568,7 @@ void setupHttp() {
     append("environment", snapshot.environment);
     append("motion", snapshot.motion);
     append("http", snapshot.http);
+    append("processing", snapshot.processing);
     json += '}';
     server.sendHeader("Cache-Control", "no-store");
     server.send(200, "application/json", json);

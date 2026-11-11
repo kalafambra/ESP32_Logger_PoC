@@ -67,8 +67,8 @@ public:
 
   /* Serialize fixed-width rows with named columns; nulls represent unavailable signals, never fake
    * zeros. */
-  void appendJson(String &json, uint32_t since) const;
-  uint32_t latestSequence() const { return sequence; }
+  bool appendJson(String &json, uint32_t since) const;
+  uint32_t latestSequence() const;
 
 private:
   // Lease-owned storage is allocated only while a tuning client subscribes.

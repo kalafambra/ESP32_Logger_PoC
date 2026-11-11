@@ -303,7 +303,14 @@ const EnvironmentHistory &environmentHistory() {
   return history;
 }
 EnvironmentStatus environmentStatus() {
+  ProcessingStateLock processingLock;
   SensorStateLock lock;
   return {missedSampleDeadlines, lateConversionServices, missedReportDeadlines,
           environmentHistoryTestsPassed};
+}
+void copyEnvironmentDashboard(EnvironmentDashboardSnapshot &snapshot) {
+  ProcessingStateLock lock;
+  snapshot.latest = latest;
+  snapshot.status = environmentStatus();
+  snapshot.history = history;
 }

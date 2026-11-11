@@ -4,6 +4,7 @@ const body=name=>service.match(new RegExp('(?:bool|void) '+name+'\\([^\\n]*\\) \
 function fixture() {
  const c={samples:true,CAPACITY:2,generation:0,drops:0,highWater:0,seenGeneration:0,
   pdTRUE:true,queue:[],processed:[],invalidations:[],Kind:{Motion:0,MotionFault:1,Reset:5},
+  processingTask:true,xTaskNotifyGive:()=>{},
   max:Math.max,millis:()=>1000,uint32_t:v=>v,
   xQueueSend:(_,packet)=>{if(c.queue.length===c.CAPACITY)return false;c.queue.push({...packet});return true;},
   uxQueueMessagesWaiting:()=>c.queue.length,
@@ -16,6 +17,7 @@ function fixture() {
  vm.createContext(c);
  for(const name of ['enqueueSensorPacket','processSensorPackets']) {
   const code=body(name).replace('static uint32_t seenGeneration = 0;','')
+   .replace(/ProcessingStateLock \w+;/g,'')
    .replace('SensorPacket packet;','let packet = {};').replace('&packet','packet')
    .replace('unsigned i','let i').replace(/SensorPacketKind::/g,'Kind.');
   vm.runInContext('function '+name+'('+ (name==='enqueueSensorPacket'?'packet':'') +'){'+code+'}',c);

@@ -50,19 +50,16 @@ void setup() {
   }
 }
 
-// Processing remains on loop for step 6. Acquisition/I2C runs independently.
-// Drain samples around HTTP; OTA explicitly pauses the acquisition owner.
+// Acquisition and processing run independently. OTA pauses both owners explicitly.
 void loop() {
   ScopedServiceTiming loopTiming(acquisitionTiming().loop);
   serviceOta();
   serviceMicrophoneAudio();
-  processSensorPackets();
   serviceHttp();
   serviceMicrophoneAudio();
   logMicrophoneDiagnostics();
-  processSensorPackets();
   const uint32_t now = millis();
-  servicePickup(now);
+  serviceProcessingFallback(now);
   servicePickupBle();
   serviceNetwork(now);
 }

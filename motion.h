@@ -6,7 +6,7 @@ void invalidateMotionProcessing(const char *message);
 void publishProcessedMotion(uint32_t now);
 void resetMotionProcessing(uint32_t now);
 
-// Hardware calls belong to setup/acquisition; processing and calibration belong to loop.
+// Hardware calls belong to setup/acquisition; algorithms/calibration belong to processing.
 // Acceleration includes gravity (m/s^2); gyro vectors use rad/s.
 constexpr uint32_t MOTION_REPORT_MS = 1000;
 constexpr unsigned MOTION_HISTORY_SIZE = 128;
@@ -38,6 +38,13 @@ struct MotionStatus {
   uint8_t failedRegister, failedCount, writeStatus;
   unsigned returnedBytes;
 };
+struct MotionDashboardSnapshot {
+  MotionReport latest;
+  MotionStatus status;
+  MotionReport reports[20];
+  unsigned count = 0;
+};
+void copyMotionDashboard(MotionDashboardSnapshot &snapshot, uint32_t since, bool history);
 
 constexpr uint8_t MOTION_DIAGNOSTIC_REGISTERS[] = {0x19, 0x1A, 0x1C, 0x23, 0x6A, 0x6B, 0x6C, 0x75};
 struct MotionDiagnostics {
@@ -61,7 +68,7 @@ bool beginMotionCalibration();
 bool beginGyroCalibration();
 MotionTemperature motionTemperature();
 MotionStatus motionStatus();
-// Borrowed reports: consume on loop() before the next acquire/calibration call.
+// Borrowed reports: processing owner only. HTTP uses copyMotionDashboard().
 const MotionReport &latestMotionReport();
 unsigned motionHistorySize();
 const MotionReport &motionHistoryAt(unsigned index); // Oldest first; index < size.

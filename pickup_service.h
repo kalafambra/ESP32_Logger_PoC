@@ -16,14 +16,24 @@ struct PickupStatus {
   bool selfTestsPassed, persisted, dataValid, ledAvailable, ledOn;
   const char *error;
 };
+struct PickupView {
+  PickupStatus status;
+  PickupSettings settings;
+  bool active, armed;
+  unsigned quietDuration;
+  uint32_t events;
+  float accelDeviation, tiltDegrees, rotationRate, accelRms, gyroRms, baselineNoise;
+  unsigned quietMs() const { return quietDuration; }
+};
+PickupView pickupView();
 
-// Main-loop service owns detector/settings/debug buffers. Its dedicated timer
+// Processing task owns detector/settings/debug buffers. Its dedicated timer
 // alone writes the LED after initialization, including while OTA blocks loop().
 void setupPickup();
 void processPickupSample(const float *accel, const float *gyro, uint32_t now);
 void servicePickup(uint32_t now);
 void invalidatePickup(const char *reason); // reason must outlive the status.
-// Borrowed read views for loop() consumers; no service or mutation between reads.
+// Borrowed view for the processing owner only; HTTP uses pickupView() snapshots.
 const PickupDetector &pickupDetector();
 PickupStatus pickupStatus();
 const PickupFields &pickupSettingFields();

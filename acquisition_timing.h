@@ -9,7 +9,7 @@ struct ServiceTiming {
   uint64_t totalUs = 0;
 };
 struct AcquisitionTiming {
-  ServiceTiming loop, environment, motion, http;
+  ServiceTiming loop, environment, motion, http, processing;
   uint32_t environmentSamples = 0, motionFrames = 0;
 };
 AcquisitionTiming &acquisitionTiming();

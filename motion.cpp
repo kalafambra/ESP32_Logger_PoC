@@ -557,7 +557,7 @@ void resetMotionProcessing(uint32_t now) {
 }
 
 /* Start five seconds of raw samples on explicit request; a reboot never triggers calibration. */
-bool beginMotionCalibration() {
+bool beginMotionCalibrationOwner() {
   SensorStateLock lock;
   if (!motionReady || motionPaused || motionCalibrating)
     return false;
@@ -574,7 +574,7 @@ bool beginMotionCalibration() {
 
 /* Gyro calibration requires stillness, not a specific orientation, and never changes accelerometer
  * offsets. */
-bool beginGyroCalibration() {
+bool beginGyroCalibrationOwner() {
   SensorStateLock lock;
   if (!motionReady || motionPaused || motionCalibrating)
     return false;
@@ -600,6 +600,7 @@ MotionTemperature motionTemperature() {
 }
 
 MotionStatus motionStatus() {
+  ProcessingStateLock processingLock;
   SensorStateLock lock;
   MotionStatus status{};
   status.ready = motionReady;
@@ -653,7 +654,6 @@ MotionDiagnostics readMotionDiagnosticsOwner() {
       result.raw[i] = decodeMotionRaw(raw[2 * i], raw[2 * i + 1]);
       result.direct[i] = result.raw[i] * (9.80665f / result.countsPerG);
     }
-    result.corrected[i] = result.direct[i] - motionBias[i];
   }
   for (unsigned i = 0; i < sizeof(MOTION_DIAGNOSTIC_REGISTERS); ++i) {
     uint8_t value;
@@ -667,5 +667,34 @@ MotionDiagnostics readMotionDiagnostics() {
   runSensorCommand([](void *argument) {
     *static_cast<MotionDiagnostics *>(argument) = readMotionDiagnosticsOwner();
   }, &result);
+  { ProcessingStateLock lock;
+    for (unsigned i = 0; i < 3; ++i) result.corrected[i] = result.direct[i] - motionBias[i];
+  }
   return result;
+}
+bool beginMotionCalibration() {
+  bool result = false;
+  runProcessingCommand([](void *argument) {
+    *static_cast<bool *>(argument) = beginMotionCalibrationOwner();
+  }, &result);
+  return result;
+}
+bool beginGyroCalibration() {
+  bool result = false;
+  runProcessingCommand([](void *argument) {
+    *static_cast<bool *>(argument) = beginGyroCalibrationOwner();
+  }, &result);
+  return result;
+}
+void copyMotionDashboard(MotionDashboardSnapshot &snapshot, uint32_t since, bool history) {
+  ProcessingStateLock lock;
+  snapshot.latest = motionLatest;
+  snapshot.status = motionStatus();
+  snapshot.count = 0;
+  if (!history) return;
+  if (since > motionLatest.sequence) since = 0;
+  for (unsigned i = 0; i < motionHistoryCount && snapshot.count < 20; ++i) {
+    const MotionReport &report = motionHistoryAt(i);
+    if (report.sequence > since) snapshot.reports[snapshot.count++] = report;
+  }
 }

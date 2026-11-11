@@ -5,6 +5,7 @@
 #include "pickup_debug.h"
 #include "pickup_events.h"
 #include "self_tests.h"
+#include "i2c_bus_service.h"
 
 namespace {
 
@@ -157,7 +158,7 @@ void servicePickup(uint32_t now) {
 
 /* Persist one versioned blob before applying; a failed save must not silently change runtime
  * behavior. */
-bool savePickupSettings(const PickupSettings &settings) {
+bool savePickupSettingsOwner(const PickupSettings &settings) {
   if (!pickup.reserveWindow(settings))
     return false;
   struct Stored {
@@ -184,6 +185,7 @@ const PickupFields &pickupSettingFields() {
   return pickupFields;
 }
 PickupStatus pickupStatus() {
+  ProcessingStateLock lock;
   bool led;
   portENTER_CRITICAL(&pickupLedMux);
   led = pickupLedOn;
@@ -192,9 +194,32 @@ PickupStatus pickupStatus() {
           pickupDataValid,        pickupLedTimer != nullptr, led,
           pickupDataError};
 }
-bool subscribePickupDebug(uint32_t now) {
+bool subscribePickupDebugOwner(uint32_t now) {
   return pickupDebug.subscribe(now);
 }
 const PickupDebug &pickupDebugHistory() {
   return pickupDebug;
+}
+PickupView pickupView() {
+  ProcessingStateLock lock;
+  return {pickupStatus(), pickup.settings, pickup.active, pickup.armed, pickup.quietMs(),
+          pickup.events, pickup.accelDeviation, pickup.tiltDegrees, pickup.rotationRate,
+          pickup.accelRms, pickup.gyroRms, pickup.baselineNoise};
+}
+bool savePickupSettings(const PickupSettings &settings) {
+  struct Request { PickupSettings settings; bool result; } request{settings, false};
+  runProcessingCommand([](void *argument) {
+    auto &request = *static_cast<Request *>(argument);
+    request.result = savePickupSettingsOwner(request.settings);
+    servicePickup(millis());
+  }, &request);
+  return request.result;
+}
+bool subscribePickupDebug(uint32_t now) {
+  struct Request { uint32_t now; bool result; } request{now, false};
+  runProcessingCommand([](void *argument) {
+    auto &request = *static_cast<Request *>(argument);
+    request.result = subscribePickupDebugOwner(request.now);
+  }, &request);
+  return request.result;
 }
