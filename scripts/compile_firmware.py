@@ -7,8 +7,10 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_BUILD = ROOT / "build-ble"
-FQBN = "esp32:esp32:esp32:PartitionScheme=no_fs"
+DEFAULT_BUILD = ROOT / "build-default"
+BLE_BUILD = ROOT / "build-ble"
+FQBN = "esp32:esp32:esp32:PartitionScheme=default"
+BLE_FQBN = "esp32:esp32:esp32:PartitionScheme=no_fs"
 
 
 def find_cli(explicit=None):
@@ -38,7 +40,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cli", help="Arduino CLI executable (otherwise detected)")
     parser.add_argument("--config", type=Path, help="Arduino CLI YAML configuration")
-    parser.add_argument("--build-dir", type=Path, default=DEFAULT_BUILD)
+    parser.add_argument("--ble", action="store_true", help="Enable preserved BLE code with the larger no_fs OTA layout")
+    parser.add_argument("--build-dir", type=Path, help="Build directory (default: build-default; --ble: build-ble)")
     parser.add_argument("--clean", action="store_true", help="Discard cached build files")
     parser.add_argument("-v", "--verbose", action="store_true", help="Show detailed compiler commands and build output")
     parser.add_argument("--dry-run", action="store_true", help="Print the command without compiling")
@@ -54,7 +57,8 @@ def main(argv=None):
             raise ValueError("Arduino CLI configuration file does not exist")
         if not (ROOT / "config.h").is_file():
             raise ValueError("Create config.h from config.example.h before compiling")
-        build = args.build_dir.resolve()
+        build = (args.build_dir or (BLE_BUILD if args.ble else DEFAULT_BUILD)).resolve()
+        fqbn = BLE_FQBN if args.ble else FQBN
         # --clean lets Arduino delete build contents. Never target the sketch,
         # its parents, or any directory holding firmware sources.
         if build == ROOT or build in ROOT.parents:
@@ -66,7 +70,8 @@ def main(argv=None):
         command = [str(cli), "compile"]
         if config is not None:
             command += ["--config-file", str(config.resolve())]
-        command += ["--fqbn", FQBN, "--build-path", str(build)]
+        command += ["--fqbn", fqbn, "--build-path", str(build),
+                    "--build-property", f"compiler.cpp.extra_flags=-DPICKUP_BLE_ENABLED={int(args.ble)}"]
         if args.clean:
             command.append("--clean")
         if args.verbose:

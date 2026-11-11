@@ -2,6 +2,7 @@ config.h
 build/
 build-fox/
 build-ble/
+build-default/
 .venv-device-tests/
 test-results/
 __pycache__/

@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <time.h>
 #include "config.h"
+#include "firmware_features.h"
 #include "environment_history.h"
 #include "http_api.h"
 #include "ota_service.h"
@@ -34,12 +35,16 @@ void wifiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
 /* Allocate optional services only after Wi-Fi gets its IP and HTTP/OTA have reserved their memory.
  */
 void startOptionalServices() {
+#if PICKUP_BLE_ENABLED
   Serial.printf("[memory] Before BLE: free=%u largest=%u\n", ESP.getFreeHeap(),
                 ESP.getMaxAllocHeap());
   if (ESP.getFreeHeap() >= 81920 && ESP.getMaxAllocHeap() >= 32768)
     setupPickupBle();
   else
     Serial.println("[ble] Skipped: need 80 KiB free / 32 KiB contiguous; see [memory] diagnostic");
+#else
+  Serial.println("[ble] Disabled at build time; event logging remains available over HTTP");
+#endif
   Serial.printf("[history] Last 30 s at 1 Hz; older data in 30 s buckets, max %u points\n",
                 EnvironmentHistory::MAX_POINTS);
   Serial.printf("[memory] Radios/routes/history: free=%u largest=%u minimum=%u\n",

@@ -1,6 +1,11 @@
 # Pickup event log over BLE
 
-The firmware advertises **Pickup lists**. Install **NimBLE-Arduino by h2zero,
+BLE is now **disabled by default**, with its implementation preserved. See
+[BUILD_VARIANTS.md](BUILD_VARIANTS.md) for the BLE-free/default-partition build
+and the exact steps to restore BLE and USB-install the larger `no_fs` layout.
+The protocol and historical validation below describe the optional BLE variant.
+
+The BLE variant advertises **Pickup lists**. Install **NimBLE-Arduino by h2zero,
 version 2.5.2** in Arduino Library Manager. It replaces the bundled Bluedroid
 BLE host to reduce runtime RAM use. No Bluetooth Serial/SPP application is needed.
 The existing Wi-Fi dashboard and OTA service remain enabled.

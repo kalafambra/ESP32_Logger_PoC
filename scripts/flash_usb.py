@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from compile_firmware import DEFAULT_BUILD, FQBN, ROOT, find_cli
+from compile_firmware import BLE_FQBN, DEFAULT_BUILD, FQBN, ROOT, find_cli
 from flash_ota import check_firmware
 
 
@@ -27,8 +27,9 @@ def main(argv=None):
             if not (build / (ROOT.name + suffix)).is_file():
                 raise ValueError("Incomplete USB build; run scripts/compile_firmware.py first")
         options = build / "build.options.json"
-        if not options.is_file() or json.loads(options.read_text(encoding="utf-8")).get("fqbn") != FQBN:
-            raise ValueError("Build does not match the ESP32 no_fs layout; compile again first")
+        fqbn = json.loads(options.read_text(encoding="utf-8")).get("fqbn") if options.is_file() else None
+        if fqbn not in (FQBN, BLE_FQBN):
+            raise ValueError("Build must use the ESP32 default or no_fs layout; compile again first")
         cli = find_cli(args.cli)
         config = args.config
         if config is None:
@@ -40,7 +41,7 @@ def main(argv=None):
         command = [str(cli), "upload"]
         if config is not None:
             command += ["--config-file", str(config.resolve())]
-        command += ["--fqbn", FQBN, "--port", args.port, "--protocol", "serial",
+        command += ["--fqbn", fqbn, "--port", args.port, "--protocol", "serial",
                     "--input-dir", str(build)]
         if args.verbose:
             command.append("--verbose")

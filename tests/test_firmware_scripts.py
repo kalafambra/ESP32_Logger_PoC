@@ -21,7 +21,8 @@ def load(name):
 
 
 compile_firmware = load("compile_firmware")
-flash_ota = load("flash_ota")
+with patch.dict(sys.modules, {"compile_firmware": compile_firmware}):
+    flash_ota = load("flash_ota")
 with patch.dict(sys.modules, {"compile_firmware": compile_firmware, "flash_ota": flash_ota}):
     flash_usb = load("flash_usb")
 
@@ -32,7 +33,7 @@ class FirmwareScripts(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name) / "ESP32_1"
         self.root.mkdir()
-        self.build = self.root / "build-ble"
+        self.build = self.root / "build-default"
         self.build.mkdir()
         self.config = self.root / "config.h"
         self.config.write_text("// private configuration\n")
@@ -59,9 +60,26 @@ class FirmwareScripts(unittest.TestCase):
         with patch.object(compile_firmware.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
             self.assertEqual(compile_firmware.main(["--build-dir", str(self.build)]), 0)
         command = run.call_args.args[0]
-        self.assertIn("esp32:esp32:esp32:PartitionScheme=no_fs", command)
+        self.assertIn("esp32:esp32:esp32:PartitionScheme=default", command)
+        self.assertIn("compiler.cpp.extra_flags=-DPICKUP_BLE_ENABLED=0", command)
         self.assertEqual(command[-1], str(self.root))
         self.assertEqual(run.call_args.kwargs["cwd"], self.root)
+
+    def test_ble_compile_selects_larger_layout_and_enables_code(self):
+        with patch.object(compile_firmware.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
+            self.assertEqual(compile_firmware.main(["--ble", "--build-dir", str(self.build)]), 0)
+        command = run.call_args.args[0]
+        self.assertIn(compile_firmware.BLE_FQBN, command)
+        self.assertIn("compiler.cpp.extra_flags=-DPICKUP_BLE_ENABLED=1", command)
+
+    def test_variants_default_to_separate_build_directories(self):
+        for ble, expected in ((False, compile_firmware.DEFAULT_BUILD), (True, compile_firmware.BLE_BUILD)):
+            with self.subTest(ble=ble), patch.object(compile_firmware.subprocess, "run") as run, \
+                    patch.object(compile_firmware.subprocess, "list2cmdline", return_value="command") as command:
+                self.assertEqual(compile_firmware.main(["--dry-run"] + (["--ble"] if ble else [])), 0)
+                args = command.call_args.args[0]
+                self.assertEqual(args[args.index("--build-path") + 1], str(expected.resolve()))
+                run.assert_not_called()
 
     def test_compile_failure_propagates(self):
         with patch.object(compile_firmware.subprocess, "run", return_value=SimpleNamespace(returncode=7)):
@@ -124,6 +142,15 @@ class FirmwareScripts(unittest.TestCase):
         with patch.object(flash_usb.subprocess, "run") as run:
             self.assertEqual(flash_usb.main(["--dry-run", "--port", "COM6", "--build-dir", str(self.build)]), 0)
             run.assert_not_called()
+
+    def test_usb_uses_selected_build_partition_layout(self):
+        for fqbn in (compile_firmware.FQBN, compile_firmware.BLE_FQBN):
+            with self.subTest(fqbn=fqbn):
+                (self.build / "build.options.json").write_text(json.dumps({"fqbn": fqbn}))
+                with patch.object(flash_usb.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
+                    self.assertEqual(flash_usb.main(["--build-dir", str(self.build)]), 0)
+                command = run.call_args.args[0]
+                self.assertEqual(command[command.index("--fqbn") + 1], fqbn)
 
     def test_usb_requires_partition_image(self):
         (self.build / "ESP32_1.ino.partitions.bin").unlink()

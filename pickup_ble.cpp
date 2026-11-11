@@ -1,4 +1,7 @@
 #include "pickup_ble.h"
+#include "firmware_features.h"
+
+#if PICKUP_BLE_ENABLED
 #include <NimBLEDevice.h>
 #include <NimBLE2904.h>
 #include <atomic>
@@ -123,3 +126,12 @@ void servicePickupBle() {
 bool isPickupBleReady() {
   return pickupBleReady;
 }
+
+#else
+
+// Keep callers and the HTTP event journal available without linking NimBLE.
+bool setupPickupBle() { return false; }
+void servicePickupBle() {}
+bool isPickupBleReady() { return false; }
+
+#endif

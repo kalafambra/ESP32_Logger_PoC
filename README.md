@@ -3,6 +3,11 @@
 ESP32-WROOM Arduino firmware with an offline dark slate dashboard, BME280,
 MPU6050, INMP441 audio spectrum, serial diagnostics and password-protected ArduinoOTA.
 
+The default build is **BLE-free** and uses the original ESP32 `default`
+partition scheme. BLE code is preserved and can be enabled with `--ble`.
+See [BUILD_VARIANTS.md](BUILD_VARIANTS.md) for both variants, USB repartitioning
+and the restoration guide for future changes.
+
 ## Current acquisition and publication rates
 
 | Sensor | Acquisition | Serial/API/graph publication |
@@ -278,8 +283,9 @@ screenshots are written to ignored `test-results/spectrum-*.png` files.
 4. Set Wi-Fi credentials, DEFAULT_ALTITUDE_M and OTA_PASSWORD in config.h.
    Wi-Fi must be 2.4 GHz. OTA requires at least 12 password characters; empty
    disables OTA. Do not share configuration or compiled firmware containing secrets.
-5. Select ESP32 Dev Module and **No FS 4MB (2MB APP x2)** (this supports OTA).
-   Keep this OTA-capable layout for the BLE firmware; first install it by USB.
+5. Select ESP32 Dev Module and **Default 4MB with spiffs** for the BLE-free build.
+   Optional BLE requires **No FS 4MB (2MB APP x2)**; see BUILD_VARIANTS.md.
+   First install a changed partition layout by USB; both layouts support OTA.
 6. Verify, select COM5 (or your current port), and Upload. Close Serial Monitor
    first. If Connecting stalls, hold BOOT until writing starts, then release.
 7. Open serial at 115200 baud, reset, and use the printed dashboard http:// IP.
@@ -311,11 +317,12 @@ private-network firewall permissions. mDNS uses UDP 5353; OTA listens on UDP
 3232 and connects back to the uploader TCP listener. The helper uses local TCP
 32320 and does not put the password in command arguments or logs.
 
-Current BLE build directory: build-ble/. Earlier builds used build-fox/ and
-build/; all are ignored by Git. Compile with an available Arduino CLI:
+Current default build directory: build-default/. Optional BLE uses build-ble/.
+Earlier builds used build-fox/ and build/; all are ignored by Git.
+Compile the BLE-free variant with an available Arduino CLI:
 
 ```text
-arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=no_fs --build-path ./build-ble .
+arduino-cli compile --fqbn esp32:esp32:esp32:PartitionScheme=default --build-property compiler.cpp.extra_flags=-DPICKUP_BLE_ENABLED=0 --build-path ./build-default .
 ```
 
 Alternatively, run these standard-library Python helpers from the project root:
@@ -328,12 +335,15 @@ python scripts/flash_ota.py
 For USB flashing on COM5, use `python scripts/flash_usb.py` instead of the OTA
 command. Close any serial monitor using that port first. The USB script uses
 Arduino's ESP32 upload recipe for the bootloader, partition table and application,
-with the same `no_fs` layout as compilation. It checks build freshness and required
+with the layout recorded by compilation (`default` or `no_fs`). It checks build freshness and required
 images before opening the port. Override the port with `--port COM6`; it also
 supports `--verbose`, `--dry-run`, `--cli`, `--config` and `--build-dir`.
 
 The compiler script builds the current saved sources and `config.h` into
-`build-ble/` with the OTA-capable `no_fs` layout. It detects Arduino CLI on PATH
+`build-default/` with the OTA-capable `default` layout and BLE compiled out.
+Add `--ble` to enable BLE with `no_fs` in `build-ble/`; select that directory
+explicitly with `--build-dir build-ble` when flashing. See BUILD_VARIANTS.md
+before switching the device partition layout. It detects Arduino CLI on PATH
 or in common Arduino IDE locations (including this PC's D: installation), and
 uses `~/.arduinoIDE/arduino-cli.yaml` when present. Override detection with
 `--cli PATH` (or `ARDUINO_CLI`) and `--config PATH`. Add `--clean` after source
@@ -576,10 +586,10 @@ Gyro readouts, rotation debug plots, configuration controls and debug CSV now
 use deg/s. The API/stored detector settings retain rad/s, with display conversion
 metadata for compatibility. See PICKUP_DETECTOR.md for details and caveats.
 
-BLE event history: see [BLE_EVENTS.md](BLE_EVENTS.md) for nRF Connect UUIDs,
+Optional BLE event history: see [BLE_EVENTS.md](BLE_EVENTS.md) for nRF Connect UUIDs,
 the single **Pickup lists** text characteristic and Android naming import,
 ten-event persistent storage, UTC handling, and phone/USB verification. This
-version requires the **No FS 4MB (2MB APP x2)** partition
+BLE variant requires the **No FS 4MB (2MB APP x2)** partition
 scheme and a one-time USB upload before OTA can resume with the larger binary.
 
 Live device/dashboard test suite: see [tests/DEVICE_TESTS.md](tests/DEVICE_TESTS.md)
