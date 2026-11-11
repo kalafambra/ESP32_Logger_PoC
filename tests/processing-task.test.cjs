@@ -45,9 +45,9 @@ for(const file of ['motion.cpp','pickup_service.cpp'])assert.ok(read(file).inclu
 // Signed lease/ordering comparisons must tolerate FIFO estimates preceding subscription/service.
 const debug=read('pickup_debug.cpp');
 let prefix=debug.match(/bool PickupDebug::capture\([^]*?\) \{([^]*?)  if \(!p.active\)/)[1]
- .replace('delete[] records;','records = null;').replace(/nullptr/g,'null');
+ .replace('delete delivery;','delivery = null;').replace(/nullptr/g,'null');
 function capturePrefix(now,lastRequest,count=0,lastCapture=0){
- const c={now,lastRequest,count,lastCapture,subscribed:true,records:[],head:0,lastRise:0,lastOnMs:0,
+ const c={now,lastRequest,haveLatest:count>0,lastCapture,subscribed:true,delivery:{},lastRise:0,lastOnMs:0,
   observedPeriod:0,observedDuty:0,NAN:NaN,int32_t:v=>v|0};
  vm.createContext(c);c.result=vm.runInContext('(function(){'+prefix+'return true;})()',c);return c;
 }

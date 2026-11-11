@@ -23,7 +23,7 @@ constexpr unsigned SAMPLES_PER_WINDOW = 5;
 static_assert(SAMPLE_INTERVAL_MS == 200, "5 Hz requires SAMPLE_INTERVAL_MS = 200");
 SampleWindow window;
 PublishedSample latest;
-EnvironmentHistory history;
+DashboardDelivery<PublishedSample, 4> delivery;
 bool environmentHistoryTestsPassed = false;
 bool windowFailed = false;
 const char *sensorError = "Sensor not initialized";
@@ -221,7 +221,7 @@ void publishWindow(uint32_t now) {
   latest.temperature.finish(window.temperature, window.count);
   latest.humidity.finish(window.humidity, window.count);
   latest.pressure.finish(window.pressure, window.count);
-  history.add(latest); // Recent one-second reports age into 30-second buckets.
+  delivery.publish(latest, millis());
   // A disconnected report must not advertise an obsolete address as usable.
   const wl_status_t wifiStatus = WiFi.status();
   const bool wifiConnected = wifiStatus == WL_CONNECTED;
@@ -273,9 +273,9 @@ void setupEnvironment() {
 }
 
 void setupEnvironmentHistory() {
-  environmentHistoryTestsPassed = runEnvironmentHistorySelfTests(history);
-  Serial.printf("[history] Tiered history self-tests: %s; storage=%u bytes\n",
-                environmentHistoryTestsPassed ? "PASS" : "FAIL", unsigned(sizeof(history)));
+  environmentHistoryTestsPassed = runDeliverySelfTests();
+  Serial.printf("[delivery] ACK buffer self-tests: %s\n",
+                environmentHistoryTestsPassed ? "PASS" : "FAIL");
 }
 void disableEnvironment() {
   sensorReady = false;
@@ -299,18 +299,15 @@ void discardEnvironmentWindow() {
 const PublishedSample &latestEnvironmentSample() {
   return latest;
 }
-const EnvironmentHistory &environmentHistory() {
-  return history;
-}
 EnvironmentStatus environmentStatus() {
   ProcessingStateLock processingLock;
   SensorStateLock lock;
   return {missedSampleDeadlines, lateConversionServices, missedReportDeadlines,
           environmentHistoryTestsPassed};
 }
-void copyEnvironmentDashboard(EnvironmentDashboardSnapshot &snapshot) {
+void copyEnvironmentDashboard(EnvironmentDashboardSnapshot &snapshot, const DeliveryRequest &request) {
   ProcessingStateLock lock;
   snapshot.latest = latest;
   snapshot.status = environmentStatus();
-  snapshot.history = history;
+  delivery.copy(request, deliveryBootId(), millis(), latest, snapshot.delivery);
 }

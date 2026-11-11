@@ -66,6 +66,13 @@ async function main(){
  assert.equal(read('markerClear.markers.length'),0,'missing data cannot invent a clearing transition');
  assert.match(read('decisionNote("tilt")'),/TRIGGER/);
  assert.match(read('decisionNote("quiet-gyro")'),/CLEARING/);
+ const priorSequence=read('lastSequence'),priorCount=read('rows.length');
+ const malformed={...packet,uptime_ms:now,rows:[[priorSequence+1,now,...Array(columns.length-2).fill(0)],[priorSequence+2]]};
+ assert.throws(()=>read('ingest('+JSON.stringify(malformed)+')'),/Invalid telemetry/);
+ assert.equal(read('lastSequence'),priorSequence,'malformed package cannot advance debug ACK');
+ assert.equal(read('rows.length'),priorCount,'malformed package cannot partially enter history');
+ await read('poll()');
+ assert.ok(requests.some(r=>/\/debug\?client=\d+&boot=\d+&ack=/.test(r.url)),'debug sends explicit ACK requests');
  console.log('PASS: tuning plots, threshold history, metadata, settings validation, polling/pause, gaps and restart');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

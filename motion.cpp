@@ -10,8 +10,10 @@
 namespace {
 
 constexpr uint8_t MPU_ADDRESS = 0x68; // AD0 tied to GND.
-MotionReport motionLatest, motionReports[MOTION_HISTORY_SIZE];
-unsigned motionHead = 0, motionHistoryCount = 0, motionSamples = 0;
+MotionReport motionLatest;
+DashboardDelivery<MotionReport, 4> motionDelivery;
+uint32_t motionReportSequence = 0;
+unsigned motionSamples = 0;
 float motionSum[3] = {}, motionMin[3] = {}, motionMax[3] = {};
 float motionGyroSum[3] = {}, motionGyroMean[3] = {};
 float motionGyroBias[3] = {};
@@ -199,8 +201,9 @@ void finishGyroCalibration() {
     motionGyroBias[i] = proposed[i];
     motionGyroSum[i] = motionSum[i] = 0;
   }
-  motionSamples = motionHistoryCount = motionHead = 0;
+  motionSamples = 0;
   motionLatest = MotionReport{};
+  motionLatest.sequence = motionReportSequence;
   motionLastReport = millis();
   motionCalibrationError = "";
   invalidatePickup("Gyro calibration changed; learning fresh residual bias");
@@ -252,9 +255,8 @@ void finishMotionCalibration() {
   }
   // Clear old uncorrected motion history and the window straddling the change.
   motionSamples = 0;
-  motionHistoryCount = 0;
-  motionHead = 0;
   motionLatest = MotionReport{};
+  motionLatest.sequence = motionReportSequence;
   motionLastReport = millis();
   motionCalibrationError = "";
   invalidatePickup("Calibration changed; waiting for fresh stationary baseline");
@@ -267,10 +269,7 @@ void publishMotion(uint32_t now) {
   if (int32_t(now - motionLastReport) < int32_t(MOTION_REPORT_MS))
     return;
   motionLatest = MotionReport{};
-  motionLatest.sequence =
-      motionHistoryCount
-          ? motionReports[(motionHead + MOTION_HISTORY_SIZE - 1) % MOTION_HISTORY_SIZE].sequence + 1
-          : 1;
+  motionLatest.sequence = ++motionReportSequence;
   motionLatest.sampleMs = motionLastReport +
                          ((now - motionLastReport) / MOTION_REPORT_MS) * MOTION_REPORT_MS;
   motionLatest.samples = motionSamples;
@@ -293,10 +292,7 @@ void publishMotion(uint32_t now) {
     motionLatest.maximum[i] = motionMax[i];
     motionSum[i] = 0;
   }
-  motionReports[motionHead] = motionLatest;
-  motionHead = (motionHead + 1) % MOTION_HISTORY_SIZE;
-  if (motionHistoryCount < MOTION_HISTORY_SIZE)
-    ++motionHistoryCount;
+  motionDelivery.publish(motionLatest, millis());
   const MotionTemperature chip = motionTemperature();
   const String temperatureText = chip.ok ? String(chip.celsius, 2) : String("unavailable");
   if (motionLatest.ok)
@@ -632,14 +628,6 @@ MotionStatus motionStatus() {
 const MotionReport &latestMotionReport() {
   return motionLatest;
 }
-unsigned motionHistorySize() {
-  return motionHistoryCount;
-}
-const MotionReport &motionHistoryAt(unsigned index) {
-  return motionReports[(motionHead + MOTION_HISTORY_SIZE - motionHistoryCount + index) %
-                       MOTION_HISTORY_SIZE];
-}
-
 MotionDiagnostics readMotionDiagnosticsOwner() {
   MotionDiagnostics result;
   result.enabled = I2C_SENSORS_ENABLED;
@@ -686,15 +674,10 @@ bool beginGyroCalibration() {
   }, &result);
   return result;
 }
-void copyMotionDashboard(MotionDashboardSnapshot &snapshot, uint32_t since, bool history) {
+void copyMotionDashboard(MotionDashboardSnapshot &snapshot, const DeliveryRequest &request, bool deliver) {
   ProcessingStateLock lock;
   snapshot.latest = motionLatest;
   snapshot.status = motionStatus();
-  snapshot.count = 0;
-  if (!history) return;
-  if (since > motionLatest.sequence) since = 0;
-  for (unsigned i = 0; i < motionHistoryCount && snapshot.count < 20; ++i) {
-    const MotionReport &report = motionHistoryAt(i);
-    if (report.sequence > since) snapshot.reports[snapshot.count++] = report;
-  }
+  snapshot.delivery.count = 0;
+  if (deliver) motionDelivery.copy(request, deliveryBootId(), millis(), motionLatest, snapshot.delivery);
 }

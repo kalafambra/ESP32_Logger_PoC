@@ -55,7 +55,7 @@ rendering freezes or run recovery/concurrency/debug profiles.
 | Name | Default duration | Checks |
 | --- | --- | --- |
 | `baseline` | 60 s | Source sequence continuity, publication rate, sample accounting, validity, latency, freshness, browser progress and rendering, heap observations |
-| `history` | 120 s | Baseline checks plus independently recomputed 30-second buckets, mean/min/max, independent MPU temperature handling, bounded browser history |
+| `history` | 120 s | Baseline checks, independent MPU temperature handling and bounded browser history; legacy coarse-bucket checks apply only to older firmware |
 | `recovery` | 5/20/40 s polling pauses plus recovery | Pauses only the primary browser's sensor requests; independent API probes check that recording continues; verifies graph backfill and catch-up |
 | `concurrency` | 60 s | A second main-dashboard browser while monitoring the first |
 | `debug` | 60 s | Main dashboard plus the pickup tuning page and its debug polling |
@@ -64,7 +64,7 @@ rendering freezes or run recovery/concurrency/debug profiles.
 Recovery tests browser polling loss, not an actual Wi-Fi outage. No sensor
 disconnect, reboot, physical motion, or BLE connection is induced automatically.
 Repeat runs under those manually controlled conditions and label each run.
-Opening `/pickup` can allocate the firmware's normal debug-history buffer;
+Opening `/pickup` can allocate the firmware's small unacknowledged telemetry buffer;
 that expected memory cost is part of the debug-load scenario. Compare memory
 within a phase rather than treating every difference between profiles as a leak.
 

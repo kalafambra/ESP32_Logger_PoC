@@ -5,15 +5,16 @@
 #include <new>
 
 PickupDebug::~PickupDebug() {
-  delete[] records;
+  delete delivery;
 }
 
 bool PickupDebug::subscribe(uint32_t now) {
-  if (!records) {
-    records = new (std::nothrow) Record[CAPACITY];
-    if (!records)
+  if (!delivery) {
+    delivery = new (std::nothrow) DashboardDelivery<Record, CAPACITY>;
+    if (!delivery)
       return false;
-    head = count = 0;
+    haveLatest = false;
+    latestRecord = Record{};
   }
   subscribed = true;
   lastRequest = now;
@@ -25,16 +26,16 @@ bool PickupDebug::capture(const PickupDetector &p, bool valid, uint32_t now, uin
   if (!subscribed)
     return false;
   if (int32_t(now - lastRequest) > 3000) {
-    delete[] records;
-    records = nullptr;
-    head = count = 0;
+    delete delivery;
+    delivery = nullptr;
+    haveLatest = false;
     subscribed = false;
     lastRise = lastOnMs = 0;
     observedPeriod = observedDuty = NAN;
     return false;
   }
   // Estimated FIFO times may precede a newer service/subscribe timestamp slightly.
-  if (count && int32_t(now - lastCapture) < 0) return false;
+  if (haveLatest && int32_t(now - lastCapture) < 0) return false;
   if (!p.active) {
     lastRise = lastOnMs = 0;
     observedPeriod = observedDuty = NAN;
@@ -49,7 +50,7 @@ bool PickupDebug::capture(const PickupDetector &p, bool valid, uint32_t now, uin
       lastOnMs = now - lastRise;
   }
   lastLed = led;
-  const Record *previous = count ? &records[(head + CAPACITY - 1) % CAPACITY] : nullptr;
+  const Record *previous = haveLatest ? &latestRecord : nullptr;
   const bool quietRejected = valid && p.quietBlockMask;
   const uint8_t triggerMask = valid ? p.triggerMask : 0;
   const bool edge = !previous || previous->values[VALID] != valid ||
@@ -111,10 +112,9 @@ bool PickupDebug::capture(const PickupDetector &p, bool valid, uint32_t now, uin
       r.values[EFFECTIVE_ACCEL] = fmaxf(s.accel_trigger, r.values[ADAPTIVE_ACCEL]);
     }
   }
-  records[head] = r;
-  head = (head + 1) % CAPACITY;
-  if (count < CAPACITY)
-    ++count;
+  latestRecord = r;
+  haveLatest = true;
+  delivery->publish(r, millis());
   lastCapture = now;
   lastQuietRejected = quietRejected;
   lastTriggerMask = triggerMask;
@@ -126,20 +126,17 @@ uint32_t PickupDebug::latestSequence() const {
   return sequence;
 }
 
-bool PickupDebug::appendJson(String &json, uint32_t since) const {
-  struct Snapshot { uint32_t latest = 0, oldest = 0; unsigned count = 0; Record rows[24]; };
+bool PickupDebug::appendJson(String &json, const DeliveryRequest &request) const {
+  using Snapshot = DashboardDelivery<Record, CAPACITY>::Snapshot;
   std::unique_ptr<Snapshot> snapshot(new (std::nothrow) Snapshot);
   if (!snapshot) return false;
+  uint32_t latest;
   {
     ProcessingStateLock lock;
-    snapshot->latest = sequence;
-    snapshot->oldest = count ? records[(head + CAPACITY - count) % CAPACITY].sequence : 0;
-    if (since > sequence) since = 0;
-    for (unsigned i = 0; i < count && snapshot->count < 24; ++i) {
-      const Record &record = records[(head + CAPACITY - count + i) % CAPACITY];
-      if (record.sequence > since) snapshot->rows[snapshot->count++] = record;
-    }
+    latest = sequence;
+    if (delivery) delivery->copy(request, deliveryBootId(), millis(), latestRecord, *snapshot);
   }
+  appendDeliveryInfo(json, snapshot->info);
   static const char *names[] = {"valid",
                                 "active",
                                 "armed",
@@ -176,8 +173,8 @@ bool PickupDebug::appendJson(String &json, uint32_t since) const {
                                 "observed_led_duty_pct",
                                 "settings_revision"};
   static_assert(sizeof(names) / sizeof(names[0]) + 4 == COUNT, "Debug schema must match rows");
-  json += ",\"capture_ms\":50,\"latest_sequence\":" + String(snapshot->latest) +
-          ",\"oldest_sequence\":" + String(snapshot->oldest);
+  json += ",\"capture_ms\":50,\"latest_sequence\":" + String(latest) +
+          ",\"oldest_sequence\":" + String(snapshot->info.oldest);
   json += ",\"columns\":[\"sequence\",\"uptime_ms\"";
   for (const char *name : names) {
     json += ",\"";

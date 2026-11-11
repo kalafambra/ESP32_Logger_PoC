@@ -47,7 +47,7 @@ small{color:#94a3b4}footer{margin:24px 0;color:#94a3b4;font-size:.8rem;line-heig
 <small id="spectrumResolution">Mono Hann FFT · power averaged over about one second. Relative digital levels, not calibrated dB SPL. Reference stays in this tab until cleared or reloaded. No audio recordings are transmitted.</small>
 </article>
 </main>
-<footer>Environmental history: latest 30 seconds at 1 Hz; older data averaged into 30-second buckets, up to 600 seconds. The newest older bucket may be partial. Faint lines retain minima/maxima. Shorter histories fill the graph width; gaps indicate unavailable reports. Motion keeps its own one-second history. Altitude adjusts pressure in this tab; reload restores the configured altitude. No internet services required.</footer>
+<footer>Plots accumulate in this browser tab, up to 600 seconds. Refresh starts fresh. The ESP32 keeps only small unacknowledged delivery buffers. Faint lines retain minima/maxima; missing reports appear as gaps. Altitude adjusts pressure in this tab; reload restores the configured altitude. No internet services required.</footer>
 <script>
 'use strict';
 const history=[],motionHistory=[];
@@ -170,12 +170,16 @@ function draw(onlyMotion=false){
   if(!values.length){ctx.fillStyle='#a5b1bf';ctx.fillText('Waiting for valid samples',left+6,(top+bottom)/2);}
  }
 }
+
+const deliveryClient=(Math.floor(Math.random()*0xFFFFFFFF)>>>0)||1;
+let environmentBoot=0,motionBoot=0;
+function deliveryUrl(path,boot,ack){return path+'?client='+deliveryClient+'&boot='+boot+'&ack='+(ack??0);}
 /* Fetch incremental reports and backfill missed polls, without overlapping HTTP requests. */
 async function poll(){
  if(!i2cSensorsEnabled)return;
  const started=performance.now();
  try{
-  const data=await requestDashboardJson('/api/readings?since='+(lastSequence??0));
+  const data=await requestDashboardJson(deliveryUrl('/api/readings',environmentBoot,lastSequence));
   if(typeof data.sequence!=='number'||typeof data.uptime_ms!=='number')throw new Error('Invalid API response');
   i2cSensorsEnabled=data.i2c_enabled!==false;
   const now=performance.now();lastSuccess=now;
@@ -186,31 +190,25 @@ async function poll(){
    altitudeM=value;altitudeInitialized=true;$('altitude').value=String(value);$('altitude').disabled=false;
   }
   // A reboot invalidates sequence continuity and the previous device-uptime timeline.
-  if(lastUptime!==null && (data.uptime_ms<lastUptime||data.sequence<lastSequence)){history.length=0;lastSequence=null;}
+  if(lastUptime!==null && ((environmentBoot&&data.boot_id!==environmentBoot)||data.uptime_ms<lastUptime||data.sequence<lastSequence)){history.length=0;lastSequence=null;}
   lastUptime=data.uptime_ms;
+  environmentBoot=data.boot_id??0;
   if(!Array.isArray(data.history))throw new Error('Missing aggregate history; refresh after firmware update');
-  const cursor=lastSequence??0;
+  // Validate the complete package before advancing the ACK cursor.
+  const incoming=[];
   for(const point of data.history){
-   const coarse=point.resolution_ms===30000,first=point.first_sequence??point.sequence;
-   const revision=point.revision??point.sequence;
-   if(!coarse&&point.sequence<=cursor)continue;
-   const existing=coarse?history.find(p=>p.resolution===30000&&p.firstSequence===first):null;
-   if(existing&&existing.revision>=revision)continue;
+   if(!Number.isInteger(point.sequence)||point.sequence<1||!Number.isFinite(point.age_ms))throw new Error('Invalid report record');
+   if(point.sequence<=(lastSequence??0))continue;
    const channels=[point.temperature_c,point.humidity_pct,point.pressure_hpa];
-   const reports=point.report_count??1;
-   const ok=point.ok&&reports>0&&point.sample_count===reports*5&&channels.every(c=>Array.isArray(c)&&c.length===3&&c.every(Number.isFinite));
-   // A revised coarse bucket replaces its previous version AND the fine points it summarizes.
-   if(coarse)for(let i=history.length-1;i>=0;--i){
-    const p=history[i];if(p.sequence>=first&&(p.firstSequence??p.sequence)<=point.sequence)history.splice(i,1);
-   }
-   // Translate device-relative age into the browser's monotonic clock domain.
-   history.push({firstSequence:first,sequence:point.sequence,revision,resolution:coarse?30000:1000,at:now-Math.min(point.age_ms,600000),
-                 t:ok?point.temperature_c:null,h:ok?point.humidity_pct:null,p:ok?point.pressure_hpa:null,
-                 m:Number.isFinite(point.mpu_temperature_c)?point.mpu_temperature_c:null});
-   lastSequence=Math.max(lastSequence??0,point.sequence);
+   if(!channels.every(c=>Array.isArray(c)&&c.length===3&&c.every(v=>v===null||Number.isFinite(v))))throw new Error('Invalid report channels');
+   const ok=point.ok&&point.sample_count===5&&channels.every(c=>c.every(Number.isFinite));
+   incoming.push({firstSequence:point.sequence,sequence:point.sequence,resolution:1000,
+    at:now-Math.min(point.age_ms,600000),t:ok?point.temperature_c:null,h:ok?point.humidity_pct:null,
+    p:ok?point.pressure_hpa:null,m:Number.isFinite(point.mpu_temperature_c)?point.mpu_temperature_c:null});
   }
-  history.sort((a,b)=>a.firstSequence-b.firstSequence);
-  if(data.history_mode==='tiered_30s')lastSequence=Math.max(lastSequence??0,data.sequence);
+  for(let i=1;i<incoming.length;i++)if(incoming[i].sequence<=incoming[i-1].sequence)throw new Error('Unordered reports');
+  for(const point of incoming){history.push(point);lastSequence=point.sequence;}
+  if(history.length>720)history.splice(0,history.length-720);
   const valid=data.sensor_ok&&[data.temperature_c,data.humidity_pct,data.pressure_hpa].every(Number.isFinite);
   updateMpuTemperature(data.motion);
   $('connection').textContent=data.wifi_connected?'Connected to ESP32':'ESP32 Wi-Fi disconnected';
@@ -236,10 +234,11 @@ let lastMotionUptime=null;
 function consumeMotion(data,now){
  const motion=data.motion;
  if(!motion)throw new Error('Missing motion status');
- if(lastMotionUptime!==null&&(data.uptime_ms<lastMotionUptime||motion.sequence<lastMotionSequence)){
+ if(lastMotionUptime!==null&&((motionBoot&&data.boot_id!==motionBoot)||data.uptime_ms<lastMotionUptime||motion.sequence<lastMotionSequence)){
   motionHistory.length=0;lastMotionSequence=null;
  }
  lastMotionUptime=data.uptime_ms;
+ motionBoot=data.boot_id??0;
  updatePickupStatus(data.pickup);
  $('motionCalibrate').disabled=!!motion.calibrating;$('gyroCalibrate').disabled=!!motion.calibrating;
  $('motionCalibrationStatus').textContent=motion.calibrating?'Calibrating '+(motion.calibration_kind||'accel')+': '+motion.calibration_samples+'/500 samples. Keep still.':motion.calibration_error||'Calibration removes fixed bias; gravity is retained.';
@@ -249,19 +248,24 @@ function consumeMotion(data,now){
  const ok=motion.ok&&Array.isArray(motion.acceleration_m_s2)&&motion.acceleration_m_s2.length===3&&motion.acceleration_m_s2.every(Number.isFinite);
  $('motionError').textContent=ok?(motion.warning||''):(motion.error||'MPU6050 unavailable');
  $('motionValues').textContent=ok?motion.acceleration_m_s2.map((v,i)=>['X','Y','Z'][i]+': '+v.toFixed(3)).join(' · ')+' m/s² · n='+(motion.sample_count??'?')+' · FIFO overflows: '+(motion.fifo_overflows??0):'—';
+ const incoming=[];
  for(const point of data.history||[]){
-  if(point.sequence<=lastMotionSequence)continue;
-  const valid=point.ok&&Array.isArray(point.a)&&point.a.length===3&&point.a.every(Number.isFinite);
-  motionHistory.push({sequence:point.sequence,at:now-Math.min(point.age_ms,600000),a:valid?point.a:null});
-  lastMotionSequence=point.sequence;
+  if(!Number.isInteger(point.sequence)||point.sequence<1||!Number.isFinite(point.age_ms)||!Array.isArray(point.a)||point.a.length!==3||!point.a.every(v=>v===null||Number.isFinite(v)))throw new Error('Invalid motion record');
+  if(point.sequence<=(lastMotionSequence??0))continue;
+  const valid=point.ok&&point.a.every(Number.isFinite);
+  incoming.push({sequence:point.sequence,at:now-Math.min(point.age_ms,600000),a:valid?point.a:null});
  }
+ for(let i=1;i<incoming.length;i++)if(incoming[i].sequence<=incoming[i-1].sequence)throw new Error('Unordered motion reports');
+ for(const point of incoming){motionHistory.push(point);lastMotionSequence=point.sequence;}
+ if(motionHistory.length>720)motionHistory.splice(0,motionHistory.length-720);
+
 }
 /* Use an independent 1 Hz request stream, with bounded backfill and no overlapping fetches. */
 async function pollMotion(){
  if(!i2cSensorsEnabled)return;
  const started=performance.now();
  try{
-  consumeMotion(await requestDashboardJson('/api/motion?since='+(lastMotionSequence??0)),performance.now());
+  consumeMotion(await requestDashboardJson(deliveryUrl('/api/motion',motionBoot,lastMotionSequence)),performance.now());
  }catch(error){
   $('motionValues').textContent='—';$('gyroValues').textContent='—';$('motionError').textContent='Motion request failed: '+error.message;
  }finally{
@@ -507,10 +511,18 @@ $('defaults').addEventListener('click',async()=>{
 });
 $('reload').addEventListener('click',()=>{if(!dirty||window.confirm('Discard unsaved edits?'))loadSettings().catch(e=>{$('saveStatus').textContent=e.message;});});
 /* Decode a versioned named-column stream; retain nulls for unavailable signals. */
+const debugClient=(Math.floor(Math.random()*0xFFFFFFFF)>>>0)||1;
+let debugBoot=0;
 function ingest(data){
  if(!Array.isArray(data.columns)||!Array.isArray(data.rows)||!Number.isFinite(data.uptime_ms))throw new Error('Invalid debug stream');
- if(lastUptime!==null&&data.uptime_ms<lastUptime){rows=[];lastSequence=0;lost=0;}
+ if(data.columns[0]!=='sequence'||data.columns[1]!=='uptime_ms'||new Set(data.columns).size!==data.columns.length)throw new Error('Invalid debug schema');
+ if(lastUptime!==null&&((debugBoot&&data.boot_id!==debugBoot)||data.uptime_ms<lastUptime)){rows=[];lastSequence=0;lost=0;}
+ debugBoot=data.boot_id??0;
  lastUptime=data.uptime_ms;columns=data.columns.map(k=>gyroUnitMap[k]||k);
+ for(const packed of data.rows){
+  if(!Array.isArray(packed)||packed.length!==columns.length||!Number.isInteger(packed[0])||packed[0]<1||!packed.every(v=>v===null||Number.isFinite(v)))throw new Error('Invalid telemetry package');
+ }
+ for(let i=1;i<data.rows.length;i++)if(data.rows[i][0]<=data.rows[i-1][0])throw new Error('Unordered telemetry');
  for(const packed of data.rows){
   if(!Array.isArray(packed)||packed.length!==columns.length)throw new Error('Invalid telemetry row');
   const point=Object.fromEntries(columns.map((key,i)=>[key,Number.isFinite(packed[i])?packed[i]*(gyroUnitMap[data.columns[i]]?180/Math.PI:1):null]));
@@ -520,6 +532,7 @@ function ingest(data){
   point.required_ratio=point.baseline_noise>0&&point.effective_accel!==null?point.effective_accel/point.baseline_noise:null;
   annotate(point,rows.at(-1));rows.push(point);lastSequence=point.sequence;
  }
+ if(rows.length>20000)rows.splice(0,rows.length-20000);
  if(settingsRevision!==null&&data.settings_revision!==settingsRevision)$('saveStatus').textContent=dirty?'Active settings changed. Unsaved form retained; reload to compare.':'Active settings changed. Reload saved settings to update the form.';
  settingsRevision=data.settings_revision;
  const p=data.pickup;
@@ -576,7 +589,7 @@ async function poll(){
  const started=performance.now();
  if(!paused){
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),2000);
-  try{const response=await fetch('/api/pickup/debug?since='+lastSequence,{cache:'no-store',signal:controller.signal});if(!response.ok)throw new Error('HTTP '+response.status);ingest(await response.json());lastContact=performance.now();$('error').textContent='';draw();}
+  try{const response=await fetch('/api/pickup/debug?client='+debugClient+'&boot='+debugBoot+'&ack='+lastSequence,{cache:'no-store',signal:controller.signal});if(!response.ok)throw new Error('HTTP '+response.status);ingest(await response.json());lastContact=performance.now();$('error').textContent='';draw();}
   catch(error){$('error').textContent='Telemetry unavailable: '+error.message+(lastContact?' · last contact '+Math.round((performance.now()-lastContact)/1000)+' s ago':'');}
   finally{clearTimeout(timeout);}
  }

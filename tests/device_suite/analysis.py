@@ -45,6 +45,7 @@ class Phase:
         self.name, self.started, self.cache = name, started, cache
         self.limits = limits or Limits()
         self.browser, self.history_required = browser, history_required
+        self.browser_history = False
         self.seeds = {k: dict(v) for k, v in cache.latest.items()}
         self.last = {k: dict(v) for k, v in cache.latest.items()}
         self.coverage = {"readings": set(), "motion": set()}
@@ -85,6 +86,8 @@ class Phase:
         if stream not in self.coverage:
             return
         self.latencies[stream].append(rtt_ms)
+        if data.get("history_mode") == "browser":
+            self.browser_history = True
         try:
             body = data if stream == "readings" else data["motion"]
             seq, uptime = int(body["sequence"]), int(data["uptime_ms"])
@@ -311,9 +314,11 @@ class Phase:
         else:
             checks.append(result("MPU sample accounting", "INCONCLUSIVE", "No complete report interval"))
         bucket_status = "FAIL" if any(e["category"] == "history" for e in self.errors) else "PASS" if self.bucket_checks else "INCONCLUSIVE"
-        if self.history_required and not self.complete_bucket_checks and bucket_status != "FAIL":
+        if self.browser_history and bucket_status != "FAIL":
+            bucket_status = "PASS"
+        if self.history_required and not self.browser_history and not self.complete_bucket_checks and bucket_status != "FAIL":
             bucket_status = "INCONCLUSIVE"
-        checks.append(result("History averages", bucket_status, "Only buckets with captured constituent reports can be independently checked", checked=self.bucket_checks, full_30_second_buckets=self.complete_bucket_checks, required=self.history_required,
+        checks.append(result("History averages", bucket_status, "Browser-owned plots; no device coarse buckets" if self.browser_history else "Only buckets with captured constituent reports can be independently checked", checked=self.bucket_checks, full_30_second_buckets=self.complete_bucket_checks, required=self.history_required,
                              problems=[e for e in self.errors if e["category"] == "history"]))
         if self.browser:
             category("Browser display", {"browser"}, "Sequence progress and redraws, not changing sensor values", probes=len(self.ui))

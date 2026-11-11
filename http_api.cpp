@@ -24,6 +24,11 @@ WebServer server(80);
 bool httpStarted = false;
 static_assert(DEFAULT_ALTITUDE_M >= -500 && DEFAULT_ALTITUDE_M <= 9000,
               "Set DEFAULT_ALTITUDE_M between -500 and 9000 meters");
+DeliveryRequest deliveryRequest() {
+  return {uint32_t(strtoul(server.arg("client").c_str(), nullptr, 10)),
+          uint32_t(strtoul(server.arg("boot").c_str(), nullptr, 10)),
+          uint32_t(strtoul(server.arg("ack").c_str(), nullptr, 10))};
+}
 void appendMotion(String &json, uint32_t now, const MotionDashboardSnapshot *provided = nullptr);
 void appendPickup(String &json);
 /*
@@ -50,27 +55,22 @@ void sendReadings() {
     server.send(503, "application/json", "{\"error\":\"Not enough memory for history snapshot\"}");
     return;
   }
-  copyEnvironmentDashboard(*snapshot);
+  copyEnvironmentDashboard(*snapshot, deliveryRequest());
   const PublishedSample &latest = snapshot->latest;
-  const EnvironmentHistory &history = snapshot->history;
   const EnvironmentStatus &status = snapshot->status;
   const uint32_t now = millis();
   const uint32_t age = now - latest.sampleMs;
   // Allow a full reporting interval plus scheduling margin before marking stale.
   const bool fresh = latest.sequence && latest.ok && age <= PUBLISH_INTERVAL_MS + 1500;
   const char *error = latest.ok && !fresh ? "One-second report stale" : latest.error;
-  // Browser requests records newer than its last sequence. This repairs missed
-  // HTTP polls instead of drawing breaks for measurements still held in RAM.
-  uint32_t since = server.hasArg("since") ? strtoul(server.arg("since").c_str(), nullptr, 10) : 0;
-  if (since > latest.sequence)
-    since = 0; // Device restarted.
   String json;
-  json.reserve(2600 + history.selected(since, now) * 272); // Includes the second temperature trace.
+  json.reserve(3600);
   json = "{\"sequence\":" + String(latest.sequence);
   json += ",\"uptime_ms\":" + String(now);
   json += ",\"i2c_enabled\":" + String(I2C_SENSORS_ENABLED ? "true" : "false");
   json +=
-      ",\"history_mode\":\"tiered_30s\",\"history_recent_ms\":30000,\"history_coarse_ms\":30000";
+      ",\"history_mode\":\"browser\",\"delivery_capacity\":4";
+  appendDeliveryInfo(json, snapshot->delivery.info);
   json += ",\"history_self_tests_passed\":" + String(status.historyTestsPassed ? "true" : "false");
   json += ",\"default_altitude_m\":" + String(DEFAULT_ALTITUDE_M, 2);
   json += ",\"sample_ms\":" + String(latest.sampleMs);
@@ -94,29 +94,21 @@ void sendReadings() {
   appendMotion(json, now);
   json += ",\"history\":[";
   bool first = true;
-  // Updated coarse rows bypass the source-sequence cursor through their promotion revision.
-  history.visit(since, now, [&](const EnvironmentHistory::Point &point, bool coarse) {
-    if (!first)
-      json += ',';
+  for (unsigned i = 0; i < snapshot->delivery.count; ++i) {
+    const PublishedSample &point = snapshot->delivery.rows[i];
+    if (!first) json += ',';
     first = false;
-    json += "{\"first_sequence\":" + String(point.firstSequence) +
-            ",\"sequence\":" + String(point.sequence);
-    json +=
-        ",\"age_ms\":" + String(now - point.midpoint()) + ",\"revision\":" + String(point.revision);
-    json += ",\"resolution_ms\":" + String(coarse ? 30000 : 1000) +
-            ",\"report_count\":" + String(point.reports);
-    json += ",\"sample_count\":" + String(point.samples) + ",\"ok\":";
-    json += point.ok ? "true" : "false";
-    json += ",\"temperature_c\":";
-    appendChannel(json, point.temperature, point.ok);
-    json += ",\"humidity_pct\":";
-    appendChannel(json, point.humidity, point.ok);
-    json += ",\"pressure_hpa\":";
-    appendChannel(json, point.pressure, point.ok);
+    json += "{\"sequence\":" + String(point.sequence) +
+            ",\"age_ms\":" + String(now - point.sampleMs) +
+            ",\"sample_count\":" + String(point.count) +
+            ",\"ok\":" + String(point.ok ? "true" : "false");
+    json += ",\"temperature_c\":"; appendChannel(json, point.temperature, point.ok);
+    json += ",\"humidity_pct\":"; appendChannel(json, point.humidity, point.ok);
+    json += ",\"pressure_hpa\":"; appendChannel(json, point.pressure, point.ok);
     json += ",\"mpu_temperature_c\":" +
-            (point.mpuSamples == point.reports ? String(point.mpuTemperatureC, 3) : String("null"));
+            (point.mpuTemperatureOk ? String(point.mpuTemperatureC, 3) : String("null"));
     json += '}';
-  });
+  }
   json += "]}";
   // Live API responses must not be replaced by a browser's cached reading.
   server.sendHeader("Cache-Control", "no-store");
@@ -140,7 +132,7 @@ void motionArray(String &json, const float *values, bool valid) {
 void appendMotion(String &json, uint32_t now, const MotionDashboardSnapshot *provided) {
   MotionDashboardSnapshot local;
   if (!provided) {
-    copyMotionDashboard(local, 0, false);
+    copyMotionDashboard(local, {}, false);
     provided = &local;
     now = millis();
   }
@@ -216,19 +208,19 @@ void appendMotion(String &json, uint32_t now, const MotionDashboardSnapshot *pro
 /* Serve small incremental batches separately from the large, slow environmental-history endpoint.
  */
 void sendMotionReadings() {
-  uint32_t since = server.hasArg("since") ? strtoul(server.arg("since").c_str(), nullptr, 10) : 0;
   MotionDashboardSnapshot snapshot;
-  copyMotionDashboard(snapshot, since, true);
+  copyMotionDashboard(snapshot, deliveryRequest(), true);
   const uint32_t now = millis();
   String json;
   json.reserve(5000);
   json = "{\"uptime_ms\":" + String(now);
+  appendDeliveryInfo(json, snapshot.delivery.info);
   appendMotion(json, now, &snapshot);
   appendPickup(json);
   json += ",\"history\":[";
   unsigned sent = 0;
-  for (unsigned i = 0; i < snapshot.count; ++i) {
-    const MotionReport &report = snapshot.reports[i];
+  for (unsigned i = 0; i < snapshot.delivery.count; ++i) {
+    const MotionReport &report = snapshot.delivery.rows[i];
     if (sent++)
       json += ',';
     json += "{\"sequence\":" + String(report.sequence) +
@@ -375,9 +367,6 @@ void sendPickupDebug() {
     server.send(503, "application/json", "{\"error\":\"Not enough memory for debug history\"}");
     return;
   }
-  uint32_t since = server.hasArg("since") ? strtoul(server.arg("since").c_str(), nullptr, 10) : 0;
-  if (since > pickupDebugHistory().latestSequence())
-    since = 0;
   String json;
   json.reserve(9000);
   json =
@@ -385,7 +374,7 @@ void sendPickupDebug() {
   json += ",\"free_heap\":" + String(ESP.getFreeHeap()) +
           ",\"largest_free_block\":" + String(ESP.getMaxAllocHeap());
   appendPickup(json);
-  if (!pickupDebugHistory().appendJson(json, since)) {
+  if (!pickupDebugHistory().appendJson(json, deliveryRequest())) {
     server.send(503, "application/json", "{\"error\":\"Not enough memory for debug snapshot\"}");
     return;
   }
@@ -595,7 +584,7 @@ void setupHttp() {
     String json = "{\"ble_ready\":" + String(isPickupBleReady() ? "true" : "false") +
                   ",\"free_heap\":" + String(ESP.getFreeHeap()) +
                   ",\"largest_free_block\":" + String(ESP.getMaxAllocHeap()) +
-                  ",\"history_capacity\":" + String(EnvironmentHistory::MAX_POINTS) +
+                  ",\"history_capacity\":" + String(0) +
                   ",\"metadata\":" + pickupEventLog().metadataJson() + ",\"events\":[";
     for (unsigned i = 0; i < 10; ++i) {
       if (i)

@@ -96,7 +96,7 @@ async function main(){
   assert.ok(strokes.includes(1),'mean drawn at full opacity');
   await read('poll()');assert.equal(read('history.length'),1,'deduplicated');
   assert.equal(read('motionHistory.length'),1,'motion sequence deduplicated');
-  assert.match(requested,/since=1$/);
+  assert.match(requested,/client=\d+&boot=\d+&ack=1$/);
   fail=true;await read('poll()');assert.match(elements.get('connection').textContent,/unreachable/);
   assert.equal(elements.get('mpuTemperature').textContent,'\u2014','network failure clears the chip reading');
   assert.equal(read('history.length'),1,'network error does not create false sensor gaps');
@@ -160,30 +160,16 @@ async function main(){
   read('history.length=0;history.push({at:performance.now(),sequence:1,t:[1,1,1],h:[1,1,1],p:[1000,1000,1000]})');
   now+=61000;read('draw()');assert.equal(read('history.length'),1,'history retained beyond 60 s');
   now+=540000;read('draw()');assert.equal(read('history.length'),0,'600-second expiry');
-  // Coarse revisions must replace fine rows even when their source sequence is behind the live cursor.
-  read('history.length=0;lastSequence=null;lastUptime=null');now+=30000;
-  response={...response,sequence:30,uptime_ms:30000,history_mode:'tiered_30s',
-    history:Array.from({length:30},(_,i)=>({...point(i+1,(29-i)*1000),first_sequence:i+1,revision:i+1,report_count:1,resolution_ms:1000}))};
-  await read('poll()');assert.equal(read('history.length'),30);
-  now+=1000;
-  const bucket=(last,reports,revision,ok=true)=>({...point(last,30000,ok),first_sequence:1,revision,report_count:reports,sample_count:reports*5,resolution_ms:30000});
-  response={...response,sequence:31,uptime_ms:31000,history:[bucket(1,1,31),point(31,0)]};
-  await read('poll()');assert.equal(read('history.filter(p=>p.resolution===1000).length'),30);
-  assert.equal(read('history[0].resolution'),30000);assert.equal(read('lastSequence'),31);
-  await read('poll()');assert.equal(read('history.length'),31,'repeated coarse revisions deduplicated');
-  now+=1000;response={...response,sequence:32,uptime_ms:32000,history:[bucket(2,2,32),point(32,0)]};
-  await read('poll()');assert.equal(read('history[0].sequence'),2);
-  assert.equal(read('history.at(-1).sequence'),32,'coarse revision does not suppress the simultaneous live report');
-  assert.equal(read('history[0].t[0]'),23,'valid multi-report bucket accepted');
-  now+=28000;response={...response,sequence:60,uptime_ms:60000,
-    history:[bucket(30,30,60),...Array.from({length:28},(_,i)=>point(i+33,(27-i)*1000))]};
-  await read('poll()');assert.equal(read('history.length'),31);
-  assert.equal(read('history.filter(p=>p.resolution===1000&&p.sequence<=30).length'),0,'coarse bucket replaces every summarized fine row');
-  assert.ok(paths.some(p=>p.alpha===1&&p.commands==='M'+'L'.repeat(30)),'mixed-resolution ranges draw a continuous line');
-  response={...response,sequence:61,uptime_ms:61000,history:[{...bucket(30,30,61,false)},point(61,0)]};
-  await read('poll()');assert.equal(read('history[0].t'),null,'invalid constituent bucket produces a real graph gap');
-  response={...response,sequence:1,uptime_ms:100,history:[point(1,0)]};
-  await read('poll()');assert.equal(read('history.length'),1,'restart clears coarse and fine histories together');
+  // Invalid packages must not advance the acknowledgment or partially append records.
+  read('history.length=0;lastSequence=10;lastUptime=10000');
+  response={...response,sequence:12,uptime_ms:12000,history:[point(11),{...point(12),temperature_c:[NaN]}]};
+  await read('poll()');assert.equal(read('lastSequence'),10);assert.equal(read('history.length'),0);
+  response={...response,sequence:14,uptime_ms:14000,boot_id:7,history:[point(14)]};
+  await read('poll()');assert.equal(read('history.length'),1);assert.equal(read('lastSequence'),14);
+  await read('poll()');assert.match(requested,/boot=7&ack=14$/);assert.equal(read('history.length'),1);
+  // A changed boot must clear history even when uptime is larger than the previous response.
+  response={...response,sequence:1,uptime_ms:50000,boot_id:8,history:[point(1)]};
+  await read('poll()');assert.equal(read('history.length'),1);assert.equal(read('lastSequence'),1);
   response={...response,sequence:2,uptime_ms:1100,temperature_c:24,sensor_ok:true,
     motion:{...response.motion,temperature_ok:false,temperature_c:null,temperature_error:'Temperature I2C failed'},
     history:[{...point(2,0),mpu_temperature_c:null}]};

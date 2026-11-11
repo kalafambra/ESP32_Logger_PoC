@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "dashboard_delivery.h"
 struct SensorPacket;
 void processMotionPacket(const SensorPacket &packet);
 void invalidateMotionProcessing(const char *message);
@@ -9,7 +10,6 @@ void resetMotionProcessing(uint32_t now);
 // Hardware calls belong to setup/acquisition; algorithms/calibration belong to processing.
 // Acceleration includes gravity (m/s^2); gyro vectors use rad/s.
 constexpr uint32_t MOTION_REPORT_MS = 1000;
-constexpr unsigned MOTION_HISTORY_SIZE = 128;
 
 struct MotionReport {
   uint32_t sequence = 0, sampleMs = 0;
@@ -41,10 +41,9 @@ struct MotionStatus {
 struct MotionDashboardSnapshot {
   MotionReport latest;
   MotionStatus status;
-  MotionReport reports[20];
-  unsigned count = 0;
+  DashboardDelivery<MotionReport, 4>::Snapshot delivery;
 };
-void copyMotionDashboard(MotionDashboardSnapshot &snapshot, uint32_t since, bool history);
+void copyMotionDashboard(MotionDashboardSnapshot &snapshot, const DeliveryRequest &request, bool deliver);
 
 constexpr uint8_t MOTION_DIAGNOSTIC_REGISTERS[] = {0x19, 0x1A, 0x1C, 0x23, 0x6A, 0x6B, 0x6C, 0x75};
 struct MotionDiagnostics {
@@ -70,6 +69,4 @@ MotionTemperature motionTemperature();
 MotionStatus motionStatus();
 // Borrowed reports: processing owner only. HTTP uses copyMotionDashboard().
 const MotionReport &latestMotionReport();
-unsigned motionHistorySize();
-const MotionReport &motionHistoryAt(unsigned index); // Oldest first; index < size.
 MotionDiagnostics readMotionDiagnostics(); // Checked I2C request executed by owner.

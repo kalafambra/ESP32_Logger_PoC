@@ -48,7 +48,7 @@ visitor templates remain in headers.
 | --- | --- |
 | `ESP32_1.ino` | Hardware startup and cooperative service order |
 | `environment.h/.cpp` | BME280 forced conversions, five-sample reports, timing counters and environmental history ownership |
-| `environment_history.h/.cpp`, `aggregation.h` | Bounded one-second / 30-second history and channel statistics |
+| `dashboard_delivery.h/.cpp`, `aggregation.h` | Bounded ACK delivery buffers and channel statistics |
 | `motion.h/.cpp` | MPU6050 registers, ISR/FIFO, calibration, temperature, reports and diagnostic snapshots |
 | `microphone.h/.cpp` | INMP441 I2S/DMA capture, borrowed audio blocks and OTA pause/resume |
 | `spectrum_analysis.h/.cpp` | Hardware-independent Hann FFT and digital power normalization |
@@ -403,25 +403,22 @@ serial and HTTP are synchronous, so rates remain best effort. Wire timeout is
 error-free timing. Sensor initialization failure requires repairing wiring and
 resetting; transient acquisition failures attempt recovery.
 
-BME history keeps only the last 30 seconds of one-second reports. Older data
-uses time-aligned 30-second buckets across approximately ten minutes, with at
-most 51 graph points (including a partial older bucket). Means are weighted by
-source reading counts; minima/maxima retain the extrema across the bucket. Any
-invalid constituent report makes its bucket unavailable. Browser updates replace
-summarized fine points instead of retaining duplicate old data. The current
-partial bucket updates incrementally until complete. Motion history holds 128 reports (~128 s)
-and sends at most 20 per request. Incremental backfill repairs missed polls;
-sequences missing beyond the retained buffers produce graph gaps. Browser
-history is time-bounded to ten minutes. Reload can restore only device history.
+Plot history is owned by the browser tab, bounded to ten minutes. Reload starts
+fresh; the ESP32 sends only the latest snapshot to a new page, then pending records.
+Environment and motion each reserve four unacknowledged reports; tuning reserves
+24 telemetry rows while subscribed. These are delivery buffers, not plot archives.
+ACKed records are released immediately. After three seconds without requests the
+subscription expires; long pauses and buffer overflow create visible sequence gaps.
+The persistent ten-event pickup journal is separate and unchanged.
 
-Environmental history metadata includes `first_sequence`, `sequence`, `revision`,
-`resolution_ms`, `report_count`, and `sample_count`. The `since` cursor is a live
-report revision: promotions resend changed older buckets, so a browser replaces
-their earlier versions and removes the fine reports they summarize. Buckets are
-aligned to 30-second device-uptime windows and plotted at their source-time
-midpoint. Startup/edge buckets can be partial; sensor-error buckets remain gaps.
-The fixed history uses 3,688 bytes including the additional chip-temperature series. HTTP response reservation follows the number
-of selected rows, replacing the previous unconditional 16,000-byte reservation.
+Requests use `client`, `boot` and `ack`. Each page generates an ephemeral client ID;
+each firmware boot exposes a random `boot_id`. The browser acknowledges the highest
+record it validated and stored through its next poll. Wrong-boot/future ACKs cannot
+evict records; a failed/lost response is retried without duplicating plot points.
+The API keeps the array name `history` for batches, but `history_mode:browser`
+means no device plot archive. Read-only calls without client return latest status
+and an empty batch without changing the subscriber. This is a single-client debug
+protocol; simultaneous pages for the same stream replace each other's subscription.
 
 The archived fox image uses a 4-bit indexed palette (16 entries, including transparency):
 4,304 bytes versus 48,676 previously, with unchanged 255 x 328 dimensions and
@@ -431,7 +428,8 @@ input. The generated `fox_image.h` matches `fox.png` (the script regenerates it)
 The dashboard now uses a text-only header and muted slate/blue styling; the fox
 include and `/fox.png` route have been removed, so no image bytes enter the firmware.
 
-Validation for this optimization: ESP32/no_fs build passed (1,428,944 application
+Historical validation for the earlier optimization (superseded by browser-owned history):
+ESP32/no_fs build passed (1,428,944 application
 bytes / 70%; 77,268 static RAM bytes / 23%). The fixed history moved about 3.2 KB
 into static storage but replaced the much larger dynamically allocated history.
 Dashboard, tuning and BLE-definition tests passed; USB flashing/hashes verified.
@@ -445,10 +443,10 @@ bytes in the largest block. Heap values vary with clients and active debug captu
 ## API and derived values
 
 - GET /: dashboard. The former /fox.png resource is no longer served.
-- GET /api/readings?since=N: BME latest report and incremental BME history.
+- GET /api/readings?client=C&boot=B&ack=N: BME latest report and unacknowledged report batch.
   sample_interval_ms=200, publish_interval_ms=1000, sample_count=5 for valid
   reports. Channels in history use [mean, minimum, maximum].
-- GET /api/motion?since=N: latest motion status plus incremental mean XYZ history.
+- GET /api/motion?client=C&boot=B&ack=N: latest motion status plus unacknowledged mean XYZ reports.
   target_hz=100, publish_interval_ms=1000, sample_count indicates raw frames
   averaged. Also returns interrupts_seen, fifo_overflows, warning, error,
   acceleration_m_s2, minimum_m_s2 and maximum_m_s2. History uses a:[X,Y,Z].
@@ -632,14 +630,13 @@ Aggregation, calibration, pickup detection/settings, event-journal writes and pl
 history are owned by the processing task. Every accepted queue packet notifies it;
 a 20 ms idle timeout also services detector gaps, the LED state and journal writes.
 Calibration, settings and debug subscription requests are acknowledged processing-owner
-commands. HTTP copies bounded reports/history/status under a recursive processing
-mutex and serializes/sends after releasing it. The environment history snapshot and
-up-to-24-row debug snapshot use temporary checked heap allocations; motion snapshots
-contain at most 20 reports. Allocation failure returns HTTP 503 without modifying
-live state. Debug timestamps stay monotonic when a FIFO estimate precedes a newer
-service timestamp. Both sensor acquisition and processing continue during slow HTTP
-transfers; CPU, allocator and flash/NVS contention still exist. Dashboard hosting and
-history delivery are unchanged.
+commands. HTTP copies bounded reports/status under a recursive processing mutex and
+serializes/sends after releasing it. Environment/motion snapshots contain at most
+four reports; tuning snapshots contain at most 24 records. Checked temporary snapshot
+allocation failure returns HTTP 503 without acknowledging records. Debug timestamps
+stay monotonic when FIFO estimates precede newer service timestamps. Acquisition
+and processing continue during HTTP transfers; CPU, allocator and flash contention
+still exist. Dashboard hosting remains on the ESP32; plot archives are browser-owned.
 
 OTA start stops the acquisition owner, clears queued samples, then waits for processing
 to pause and cancel calibration. Failed OTA resets FIFO/BME scheduling, queues a fresh
@@ -693,3 +690,19 @@ Hardware verification after installing the default build:
    retained bias after reboot. Move the board and verify pickup/LED behavior.
 4. Verify a normal OTA update and, when convenient, recovery from an interrupted
    transfer. Build/test success alone does not establish any of these hardware results.
+
+### Browser history verification (blocks 8–9)
+
+Open the dashboard and let plots accumulate, then refresh: each stream starts with
+only its latest report. Poll requests carry client, boot, ack; responses include
+boot_id and delivery (acknowledged, dropped, oldest, gap). With no new report,
+history becomes empty after the previous batch is acknowledged. Dropping a response
+retries pending records; acknowledging a batch releases it. A device restart changes
+boot_id and clears browser history. Main plots cap memory at 720 points per stream;
+tuning caps at 20,000 points, in addition to the ten-minute time limit. Time-scale
+controls and absolute time axes remain for blocks 10–11.
+
+The API-only device-suite runner uses the ACK protocol; normal status-only probes do
+not disturb browser delivery. Its history profile no longer requires firmware coarse
+buckets in browser-history mode. Long-disconnect recovery profiles can intentionally
+report sequence gaps: backfill beyond the small delivery buffers is no longer promised.

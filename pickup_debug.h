@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include <Arduino.h>
 #include "pickup_detector.h"
+#include "dashboard_delivery.h"
 
 /* Compact telemetry is independent of detection and exists only while a tuning client subscribes.
  */
@@ -10,7 +11,7 @@ public:
   ~PickupDebug();
   PickupDebug(const PickupDebug &) = delete;
   PickupDebug &operator=(const PickupDebug &) = delete;
-  static constexpr unsigned CAPACITY = 128, CAPTURE_MS = 50;
+  static constexpr unsigned CAPACITY = 24, CAPTURE_MS = 50;
   enum Field {
     VALID,
     ACTIVE,
@@ -67,14 +68,15 @@ public:
 
   /* Serialize fixed-width rows with named columns; nulls represent unavailable signals, never fake
    * zeros. */
-  bool appendJson(String &json, uint32_t since) const;
+  bool appendJson(String &json, const DeliveryRequest &request) const;
   uint32_t latestSequence() const;
 
 private:
   // Lease-owned storage is allocated only while a tuning client subscribes.
-  Record *records = nullptr;
+  DashboardDelivery<Record, CAPACITY> *delivery = nullptr;
+  Record latestRecord{};
+  bool haveLatest = false;
   uint32_t sequence = 0, lastCapture = 0, lastRequest = 0;
-  unsigned head = 0, count = 0;
   bool subscribed = false, lastLed = false;
   uint32_t lastRise = 0, lastOnMs = 0;
   float observedPeriod = NAN, observedDuty = NAN;

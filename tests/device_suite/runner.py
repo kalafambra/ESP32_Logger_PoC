@@ -85,6 +85,8 @@ class Suite:
         self.warmup = Phase("warmup", time.monotonic(), self.cache, args.limits)
         self.completed = []
         self.cursors = dict(readings=0, motion=0)
+        self.delivery_boots = dict(readings=0, motion=0)
+        self.delivery_client = (time.monotonic_ns() & 0xFFFFFFFF) or 1
         self.page = self.context = self.browser = self.playwright = None
         self.primary_paused = False
         self.api_enabled = args.api_only
@@ -146,18 +148,19 @@ class Suite:
             if stream == "diagnostics" or self.api_enabled:
                 path = PATHS[stream]
                 if stream != "diagnostics":
-                    path += "?since=" + str(self.cursors[stream])
+                    path += f"?client={self.delivery_client}&boot={self.delivery_boots[stream]}&ack={self.cursors[stream]}"
                 data, elapsed, status, error = await asyncio.to_thread(self.http, path)
                 role = "primary" if stream == "diagnostics" or self.api_enabled else "draining-probe"
                 self.ingest(stream, data, elapsed, status, error, role=role)
                 if not error and status == 200 and stream != "diagnostics" and isinstance(data, dict):
-                    if stream == "readings":
-                        self.cursors[stream] = data.get("sequence", 0)
-                    else:
-                        # Respect the firmware's 20-row motion backfill cap.
-                        rows = data.get("history", [])
-                        if rows:
-                            self.cursors[stream] = rows[-1]["sequence"]
+                    boot = data.get("boot_id", 0)
+                    if boot != self.delivery_boots[stream]:
+                        self.cursors[stream] = 0
+                    self.delivery_boots[stream] = boot
+                    # ACK only records actually received, never the latest-status sequence.
+                    rows = data.get("history", [])
+                    if rows:
+                        self.cursors[stream] = rows[-1]["sequence"]
             await asyncio.sleep(max(.01, interval-(time.monotonic()-started)))
 
     async def route(self, route):
